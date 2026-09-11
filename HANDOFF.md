@@ -49,8 +49,8 @@ JDownloader's pages. Both reviews are on GitHub under magnetgrouplabs.
 - Update notifier items from the 2026-07-25 block below.
 
 **Not posted yet:** replies on issues #20, #21, #22 and the CAPTCHA tracking issue (Anthony approved
-the idea, text not drafted). Report with the full review:
-C:\Users\anthony\claude-reports\jdownloader-pr-review-and-issues-2026-09-11.md
+the idea, text not drafted). The full review report is in the local claude-reports folder, dated
+2026-09-11.
 
 ## Where things stand (2026-07-25)
 
