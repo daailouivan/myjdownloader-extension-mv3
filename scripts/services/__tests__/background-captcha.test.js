@@ -220,6 +220,7 @@ describe('Background CAPTCHA Handlers (CAP-03, CAP-04, CAP-07)', () => {
 
     it('allows the known hCaptcha and reCAPTCHA API endpoints', () => {
       expect(isCaptchaApiScript('https://hcaptcha.com/1/api.js')).toBe(true);
+      expect(isCaptchaApiScript('https://js.hcaptcha.com/1/api.js')).toBe(true);
       expect(isCaptchaApiScript('https://www.google.com/recaptcha/api.js')).toBe(true);
     });
 
@@ -268,11 +269,20 @@ describe('Background CAPTCHA Handlers (CAP-03, CAP-04, CAP-07)', () => {
       expect(section[0]).toMatch(/isCaptchaApiScript\(/);
     });
 
-    it('should load the script in the MAIN world via chrome.scripting.executeScript', () => {
+    it('should load the script in the MAIN world via injectCaptchaApiScript (retries frame-removed)', () => {
+      expect(bgSource).toMatch(/function\s+injectCaptchaApiScript\s*\(/);
+      expect(bgSource).toMatch(/isTransientFrameError/);
+      expect(bgSource).toMatch(/Frame with ID/);
       const section = bgSource.match(/action\s*===\s*["']myjd-captcha-load-api["'][\s\S]*?\n \}/);
       expect(section).not.toBeNull();
-      expect(section[0]).toMatch(/chrome\.scripting\.executeScript/);
-      expect(section[0]).toMatch(/world:\s*['"]MAIN['"]/);
+      expect(section[0]).toMatch(/injectCaptchaApiScript\(/);
+      // The actual executeScript lives inside injectCaptchaApiScript
+      const inject = bgSource.match(/function\s+injectCaptchaApiScript[\s\S]*?\n\}/);
+      expect(inject).not.toBeNull();
+      expect(inject[0]).toMatch(/chrome\.scripting\.executeScript/);
+      expect(inject[0]).toMatch(/world:\s*['"]MAIN['"]/);
+      expect(inject[0]).toMatch(/data-cfasync/);
+      expect(inject[0]).toMatch(/captchaContainer/);
     });
 
     it('should report load/error back via window.postMessage with target origin \'*\'', () => {
@@ -280,9 +290,9 @@ describe('Background CAPTCHA Handlers (CAP-03, CAP-04, CAP-07)', () => {
       // string "null", which postMessage rejects with a SyntaxError instead
       // of sending (S7). Same window, no secret in the payload, and the
       // receiver already checks event.source === window.
-      const section = bgSource.match(/action\s*===\s*["']myjd-captcha-load-api["'][\s\S]*?\n \}/);
-      expect(section).not.toBeNull();
-      const postMessageCalls = section[0].match(/window\.postMessage\([^)]*\)/g);
+      const inject = bgSource.match(/function\s+injectCaptchaApiScript[\s\S]*?\n\}/);
+      expect(inject).not.toBeNull();
+      const postMessageCalls = inject[0].match(/window\.postMessage\([^)]*\)/g);
       expect(postMessageCalls).not.toBeNull();
       expect(postMessageCalls.length).toBeGreaterThanOrEqual(2);
       postMessageCalls.forEach(function(call) {

@@ -32,12 +32,13 @@ describe('MYJD CAPTCHA Solver Content Script', function() {
     });
   });
 
-  describe('DOM replacement', function() {
-    it('should call document.open for DOM replacement', function() {
-      expect(csSource).toMatch(/document\.open/);
+  describe('DOM wipe', function() {
+    it('must not call document.open/close (tears down the frame; api.js never loads)', function() {
+      expect(csSource).not.toMatch(/^\s*document\.open\s*\(/m);
+      expect(csSource).not.toMatch(/^\s*document\.close\s*\(/m);
     });
-    it('should call document.close', function() {
-      expect(csSource).toMatch(/document\.close/);
+    it('should document the Frame-with-ID-0 failure mode', function() {
+      expect(csSource).toMatch(/Frame with ID 0 was removed/);
     });
     it('should reuse document.body instead of appending a second body', function() {
       expect(csSource).toMatch(/var body = document\.body/);
@@ -45,9 +46,16 @@ describe('MYJD CAPTCHA Solver Content Script', function() {
       // Must not createElement('body') as the primary path — that caused the blank tab.
       expect(csSource).toMatch(/if \(!body\)/);
     });
+    it('should ensure a <head> exists for the MAIN-world api.js injector', function() {
+      expect(csSource).toMatch(/document\.head/);
+      expect(csSource).toMatch(/createElement\('head'\)/);
+    });
     it('should have clearDocument defense that removes foreign bodies', function() {
       expect(csSource).toMatch(/clearDocument/);
       expect(csSource).toMatch(/removeForeignBodies/);
+    });
+    it('should preserve CAPTCHA api.js scripts when clearing <head>', function() {
+      expect(csSource).toMatch(/hcaptcha\.com\/1\/api\.js/);
     });
     it('should have DOMContentLoaded defense for foreign body removal', function() {
       expect(csSource).toMatch(/DOMContentLoaded/);
@@ -76,8 +84,8 @@ describe('MYJD CAPTCHA Solver Content Script', function() {
     it('should know the reCAPTCHA API script URL', function() {
       expect(csSource).toMatch(/google\.com\/recaptcha\/api\.js/);
     });
-    it('should know the hCaptcha API script URL', function() {
-      expect(csSource).toMatch(/hcaptcha\.com\/1\/api\.js/);
+    it('should know the hCaptcha API script URL (canonical js.hcaptcha.com CDN)', function() {
+      expect(csSource).toMatch(/js\.hcaptcha\.com\/1\/api\.js/);
     });
     it('should handle invisible/v3 with data-size invisible', function() {
       expect(csSource).toMatch(/data-size.*invisible|invisible.*data-size/);

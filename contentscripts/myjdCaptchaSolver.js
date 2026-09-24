@@ -4,22 +4,32 @@
 // Hash gate: only activate on pages navigated to with #rc2jdt hash
 if (!location.hash.startsWith('#rc2jdt')) return;
 
-// --- DOM replacement (defense-in-depth) ---
+// --- DOM wipe (defense-in-depth) ---
 // Abort the hoster document so its HTML/CSS cannot race with our UI.
 try { window.stop(); } catch (e) { /* ignore */ }
 
-// Strategy 1: Replace the document, then REUSE document.body.
-// document.open()/close() already creates an empty <body>. Appending a second
-// <body id="myjd-captcha-body"> orphans the solver UI: browsers keep the first
-// body as document.body (where hCaptcha portals), so the tab looks blank while
-// the real widget sits on the second, non-document body.
-document.open();
-document.close();
+// IMPORTANT: do NOT call document.open()/close(). That tears down the browsing
+// frame mid-navigation and makes chrome.scripting.executeScript fail with
+// "Frame with ID 0 was removed", so hCaptcha's api.js is never requested.
+// Wipe the existing Document in place so the frame id stays stable, then
+// reuse document.body (never append a second <body> — that orphans the UI).
+var html = document.documentElement;
+if (!html) {
+    html = document.createElement('html');
+    document.appendChild(html);
+}
+var head = document.head;
+if (!head) {
+    head = document.createElement('head');
+    html.insertBefore(head, html.firstChild);
+} else {
+    while (head.firstChild) head.removeChild(head.firstChild);
+}
 
 var body = document.body;
 if (!body) {
     body = document.createElement('body');
-    document.documentElement.appendChild(body);
+    html.appendChild(body);
 } else {
     while (body.firstChild) body.removeChild(body.firstChild);
 }
@@ -60,7 +70,16 @@ var clearDocument = function() {
             continue;
         }
         if (child.nodeName === 'HEAD') {
-            while (child.firstChild) child.removeChild(child.firstChild);
+            // Keep CAPTCHA provider api.js if the MAIN-world injector parked it
+            // in <head>; wiping it would undo myjd-captcha-load-api.
+            var hchild = child.firstChild;
+            while (hchild) {
+                var next = hchild.nextSibling;
+                var keep = hchild.nodeName === 'SCRIPT' && hchild.src &&
+                    /hcaptcha\.com\/1\/api\.js|google\.com\/recaptcha\/api\.js/.test(hchild.src);
+                if (!keep) child.removeChild(hchild);
+                hchild = next;
+            }
             continue;
         }
         html.removeChild(child);
@@ -69,7 +88,7 @@ var clearDocument = function() {
 document.addEventListener('readystatechange', clearDocument);
 
 // Strategy 3: Remove foreign bodies on DOMContentLoaded — and immediately if
-// the open/close cycle already left us past 'loading' (so the event never fires).
+// we are already past 'loading' (so the event never fires).
 var onDomReady = function() { removeForeignBodies(); };
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', onDomReady);
@@ -142,7 +161,7 @@ function renderCaptchaWidget(job) {
     if (isHcaptcha) {
         widgetDiv.className = 'h-captcha';
         widgetDiv.setAttribute('data-sitekey', job.siteKey);
-        apiScriptUrl = 'https://hcaptcha.com/1/api.js';
+        apiScriptUrl = 'https://js.hcaptcha.com/1/api.js';
     } else {
         widgetDiv.className = 'g-recaptcha';
         widgetDiv.setAttribute('data-sitekey', job.siteKey);

@@ -156,11 +156,66 @@ function isCaptchaApiScript(url) {
   var parsed = new URL(url);
   if (parsed.protocol !== 'https:') return false;
   if (parsed.pathname !== '/1/api.js' && parsed.pathname !== '/recaptcha/api.js') return false;
-  var allowedHosts = ['hcaptcha.com', 'www.google.com'];
+  // js.hcaptcha.com is the canonical CDN; hcaptcha.com/1/api.js still redirects there.
+  var allowedHosts = ['hcaptcha.com', 'js.hcaptcha.com', 'www.google.com'];
   return allowedHosts.indexOf(parsed.hostname) !== -1;
  } catch (err) {
   return false;
  }
+}
+
+function isTransientFrameError(err) {
+ var msg = (err && (err.message || String(err))) || '';
+ return /Frame with ID \d+ was removed|No frame with id|Cannot access contents of (the page|url)|The tab was closed/i.test(msg);
+}
+
+/**
+ * Inject a CAPTCHA provider api.js into the tab's MAIN world, retrying when
+ * the frame was torn down mid-navigation (document.open races, redirects).
+ */
+function injectCaptchaApiScript(tabId, url) {
+ var maxAttempts = 5;
+ var attempt = 0;
+ function once() {
+  attempt++;
+  return chrome.scripting.executeScript({
+   target: { tabId: tabId },
+   world: 'MAIN',
+   args: [url],
+   func: function(scriptUrl) {
+    // Ensure <head> exists: after an in-place wipe it should, but never fall
+    // back to documentElement — clearDocument would strip a script parked there.
+    var head = document.head;
+    if (!head) {
+     head = document.createElement('head');
+     var root = document.documentElement;
+     root.insertBefore(head, root.firstChild);
+    }
+    var container = document.getElementById('captchaContainer') || head;
+    var script = document.createElement('script');
+    script.src = scriptUrl;
+    script.async = true;
+    // Cloudflare rocket-loader: do not defer this third-party widget script.
+    script.setAttribute('data-cfasync', 'false');
+    script.addEventListener('load', function() {
+     window.postMessage({ __myjd_captcha_api__: true, status: 'loaded' }, '*');
+    });
+    script.addEventListener('error', function() {
+     window.postMessage({ __myjd_captcha_api__: true, status: 'error' }, '*');
+    });
+    container.appendChild(script);
+   }
+  }).catch(function(err) {
+   if (isTransientFrameError(err) && attempt < maxAttempts) {
+    console.warn('Background: CAPTCHA API inject attempt', attempt, 'failed (transient), retrying:', err && err.message);
+    return new Promise(function(resolve) {
+     setTimeout(resolve, 50 * attempt);
+    }).then(once);
+   }
+   throw err;
+  });
+ }
+ return once();
 }
 
 async function addLinkToRequestQueue(link, tab) {
@@ -1137,23 +1192,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
    sendResponse({ status: 'error', error: 'url not allowed' });
    return true;
   }
-  chrome.scripting.executeScript({
-   target: { tabId: sender.tab.id },
-   world: 'MAIN',
-   args: [request.data.url],
-   func: function(url) {
-    var container = document.getElementById('captchaContainer') || document.head || document.documentElement;
-    var script = document.createElement('script');
-    script.src = url;
-    script.addEventListener('load', function() {
-     window.postMessage({ __myjd_captcha_api__: true, status: 'loaded' }, '*');
-    });
-    script.addEventListener('error', function() {
-     window.postMessage({ __myjd_captcha_api__: true, status: 'error' }, '*');
-    });
-    container.appendChild(script);
-   }
-  }).then(function() {
+  injectCaptchaApiScript(sender.tab.id, request.data.url).then(function() {
    sendResponse({ status: 'ok' });
   }).catch(function(err) {
    console.error('Background: Failed to load CAPTCHA API script in MAIN world:', err);
