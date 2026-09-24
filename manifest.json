@@ -61,6 +61,11 @@
   "matches": [ "*://*/*" ],
   "run_at": "document_end"
   }, {
+  "all_frames": false,
+  "js": [ "contentscripts/browserSolverBridge.js" ],
+  "matches": [ "http://127.0.0.1/*", "http://localhost/*", "https://127-0-0-1.mydns.jdownloader.org/*", "http://127-0-0-1.mydns.jdownloader.org/*", "https://localhost.mydns.jdownloader.org/*", "http://localhost.mydns.jdownloader.org/*" ],
+  "run_at": "document_end"
+  }, {
   "all_frames": true,
   "js": [ "contentscripts/webinterfaceEnhancer.js" ],
   "matches": [ "*://my.jdownloader.org/*" ],
