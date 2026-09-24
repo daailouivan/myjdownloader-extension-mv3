@@ -1121,6 +1121,32 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
  // CAPTCHA tab tracking and message handling
  // ============================================================
 
+ // MyJD web UI captcha icon (images/captcha.png / #gwtCaptchasWaiting).
+ // Always runs the same open path as remote auto-open, but ignores the
+ // AUTO_OPEN_REMOTE_CAPTCHA opt-in — the icon is the manual trigger.
+ if (action === "myjd-webui-captcha-click") {
+  openPendingRemoteCaptchas({ manual: true }).then(function(result) {
+   sendResponse({ status: 'ok', result: result });
+  }).catch(function(err) {
+   console.error('Background: myjd-webui-captcha-click failed:', err);
+   sendResponse({ status: 'error', error: err && err.message });
+  });
+  return true;
+ }
+
+ // Legacy MV2 shape the MyJD page may post (type/name via content script).
+ // Rc2Service used to handle myjdrc2/captcha-new but is never instantiated;
+ // route it through the same manual open path (page params rarely carry
+ // deviceId, so we still list/get via offscreen like auto-open).
+ if (action === "captcha-new" && request.name === "myjdrc2") {
+  openPendingRemoteCaptchas({ manual: true }).then(function(result) {
+   sendResponse({ status: 'ok', result: result });
+  }).catch(function(err) {
+   sendResponse({ status: 'error', error: err && err.message });
+  });
+  return true;
+ }
+
  // MYJD CAPTCHA: prepare tab (write session storage, add CSP rule, navigate)
  if (action === "myjd-prepare-captcha-tab") {
   prepareCaptchaTab(request.data.tabId, request.data.jobDetails, 'MYJD', 'MYJD', sendResponse);
@@ -1622,10 +1648,17 @@ async function pruneStaleRemoteCaptchaOpen() {
  }
 }
 
-async function pollRemoteCaptchas() {
- // Opt-in: only poll when explicitly enabled.
- if (settings[STORAGE_KEYS.AUTO_OPEN_REMOTE_CAPTCHA] !== true) return;
- if (!state.isConnected) return;
+async function openPendingRemoteCaptchas(options) {
+ options = options || {};
+ var manual = options.manual === true;
+ // Auto-open stays opt-in. Manual triggers (MyJD captcha icon / captcha-new)
+ // always attempt to open, even when the setting is off.
+ if (!manual && settings[STORAGE_KEYS.AUTO_OPEN_REMOTE_CAPTCHA] !== true) {
+  return { opened: 0, focused: 0, reason: 'auto-open-disabled' };
+ }
+ if (!manual && !state.isConnected) {
+  return { opened: 0, focused: 0, reason: 'not-connected' };
+ }
 
  await pruneStaleRemoteCaptchaOpen();
 
@@ -1633,16 +1666,22 @@ async function pollRemoteCaptchas() {
  try {
   devicesResult = await sendToOffscreen('offscreen-get-devices');
  } catch (e) {
-  console.warn('Background: remote captcha poll devices failed:', e);
-  return;
+  console.warn('Background: remote captcha devices failed:', e);
+  return { opened: 0, focused: 0, reason: 'devices-failed' };
  }
- if (!devicesResult || devicesResult.error || !devicesResult.success) return;
+ if (!devicesResult || devicesResult.error || !devicesResult.success) {
+  return { opened: 0, focused: 0, reason: 'devices-unsuccessful' };
+ }
 
  let devices = devicesResult.devices;
  if (devices && devices.list && Array.isArray(devices.list)) devices = devices.list;
- if (!Array.isArray(devices)) return;
+ if (!Array.isArray(devices)) {
+  return { opened: 0, focused: 0, reason: 'no-devices' };
+ }
 
  const seenIds = new Set();
+ var opened = 0;
+ var focused = 0;
 
  for (const device of devices) {
   if (!device || !device.id) continue;
@@ -1654,7 +1693,6 @@ async function pollRemoteCaptchas() {
    continue;
   }
   if (!listResult || !listResult.success) {
-   // Per-device failure must not abort the rest of the poll (direct-conn blip).
    console.warn('Background: captcha list unsuccessful for', device.id, listResult && listResult.error);
    continue;
   }
@@ -1664,9 +1702,27 @@ async function pollRemoteCaptchas() {
    const captchaId = job.id;
    seenIds.add(String(captchaId));
 
-   if (findTabIdForCaptcha(captchaId) != null) continue;
-   if (isCaptchaOnCooldown(captchaId)) continue;
-   if (remoteCaptchaOpen[captchaId]) continue;
+   var existingTabId = findTabIdForCaptcha(captchaId);
+   if (existingTabId != null) {
+    if (manual) {
+     try {
+      await chrome.tabs.update(existingTabId, { active: true });
+      focused++;
+     } catch (e) { /* tab may be gone */ }
+    }
+    continue;
+   }
+   // Cooldown only applies to silent auto-open; an explicit icon click reopens.
+   if (!manual && isCaptchaOnCooldown(captchaId)) continue;
+   if (remoteCaptchaOpen[captchaId]) {
+    if (manual && remoteCaptchaOpen[captchaId].tabId != null) {
+     try {
+      await chrome.tabs.update(remoteCaptchaOpen[captchaId].tabId, { active: true });
+      focused++;
+     } catch (e) { /* ignore */ }
+    }
+    continue;
+   }
 
    let detailResult;
    try {
@@ -1690,14 +1746,15 @@ async function pollRemoteCaptchas() {
    remoteCaptchaOpen[captchaId] = { tabId: null, deviceId: device.id, openedAt: Date.now() };
 
    await new Promise((resolve) => {
-    prepareCaptchaTab(null, jobDetails, 'MYJD', 'remote MyJD', function(resp) {
+    prepareCaptchaTab(null, jobDetails, 'MYJD', manual ? 'MyJD captcha icon' : 'remote MyJD', function(resp) {
      if (resp && resp.status === 'ok' && resp.tabId != null) {
       remoteCaptchaOpen[captchaId] = {
        tabId: resp.tabId,
        deviceId: device.id,
        openedAt: Date.now()
       };
-      console.log('Background: opened remote captcha tab', resp.tabId, 'for', jobDetails.hoster, captchaId);
+      opened++;
+      console.log('Background: opened remote captcha tab', resp.tabId, 'for', jobDetails.hoster, captchaId, manual ? '(manual)' : '(auto)');
      } else {
       delete remoteCaptchaOpen[captchaId];
       console.warn('Background: failed to open remote captcha tab', resp);
@@ -1711,14 +1768,14 @@ async function pollRemoteCaptchas() {
  // Clean up tracking for captchas that disappeared from every device list.
  for (const id of Object.keys(remoteCaptchaOpen)) {
   if (!seenIds.has(String(id))) {
-   const entry = remoteCaptchaOpen[id];
    delete remoteCaptchaOpen[id];
-   if (entry && entry.tabId != null && activeCaptchaTabs[entry.tabId]) {
-    // Captcha expired/solved elsewhere — leave the tab; user can close it.
-    // Just drop our reservation so a future job can reopen if needed.
-   }
   }
  }
+ return { opened: opened, focused: focused };
+}
+
+async function pollRemoteCaptchas() {
+ await openPendingRemoteCaptchas({ manual: false });
 }
 
 function syncRemoteCaptchaAlarm() {

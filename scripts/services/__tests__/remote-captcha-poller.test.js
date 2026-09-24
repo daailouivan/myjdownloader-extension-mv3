@@ -202,7 +202,23 @@ describe('Remote MyJD captcha poller', () => {
 
     it('only polls when AUTO_OPEN_REMOTE_CAPTCHA is explicitly true', () => {
       expect(bgSource).toMatch(/AUTO_OPEN_REMOTE_CAPTCHA/);
-      expect(bgSource).toMatch(/AUTO_OPEN_REMOTE_CAPTCHA\] !== true\) return/);
+      // openPendingRemoteCaptchas gates auto mode; pollRemoteCaptchas calls it with manual:false.
+      expect(bgSource).toMatch(/function openPendingRemoteCaptchas/);
+      expect(bgSource).toMatch(/!manual && settings\[STORAGE_KEYS\.AUTO_OPEN_REMOTE_CAPTCHA\] !== true/);
+      expect(bgSource).toMatch(/async function pollRemoteCaptchas\(\)[\s\S]*?openPendingRemoteCaptchas\(\{\s*manual:\s*false/);
+    });
+
+    it('myjd-webui-captcha-click opens pending captchas even when auto-open is off', () => {
+      expect(bgSource).toMatch(/action === ["']myjd-webui-captcha-click["']/);
+      expect(bgSource).toMatch(/openPendingRemoteCaptchas\(\{\s*manual:\s*true/);
+      // Manual path must not re-check the opt-in flag (only !manual does).
+      const clickIdx = bgSource.indexOf('myjd-webui-captcha-click');
+      expect(clickIdx).toBeGreaterThan(-1);
+    });
+
+    it('forwards legacy myjdrc2 captcha-new through the same manual open path', () => {
+      expect(bgSource).toMatch(/action === ["']captcha-new["']/);
+      expect(bgSource).toMatch(/request\.name === ["']myjdrc2["']/);
     });
 
     it('exposes configurable poll interval and reopen cooldown (minutes)', () => {
