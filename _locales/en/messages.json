@@ -510,5 +510,20 @@
    },
    "ui_status_panel_no_device_connected_click_here": {
       "message": "Click here"
+   },
+   "ui_settings_auto_open_remote_captcha_title": {
+      "message": "Remote JDownloader CAPTCHAs"
+   },
+   "ui_settings_auto_open_remote_captcha_description": {
+      "message": "Open a tab to solve CAPTCHAs from a JDownloader running on another machine (NAS, server, Docker)."
+   },
+   "ui_settings_remote_captcha_poll_interval": {
+      "message": "Check every"
+   },
+   "ui_settings_remote_captcha_reopen_cooldown": {
+      "message": "Wait before reopening a closed CAPTCHA"
+   },
+   "ui_settings_remote_captcha_minutes": {
+      "message": "minutes"
    }
 }

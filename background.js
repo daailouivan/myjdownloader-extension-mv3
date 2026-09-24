@@ -7,7 +7,10 @@ const STORAGE_KEYS = {
  CLICKNLOAD_ACTIVE: 'CLICKNLOAD_ACTIVE',
  CONTEXT_MENU_SIMPLE: 'CONTEXT_MENU_SIMPLE',
  CLIPBOARD_OBSERVER: 'CLIPBOARD_OBSERVER',
- DEFAULT_PREFERRED_JD: 'DEFAULT_PREFERRED_JD'
+ DEFAULT_PREFERRED_JD: 'DEFAULT_PREFERRED_JD',
+ AUTO_OPEN_REMOTE_CAPTCHA: 'AUTO_OPEN_REMOTE_CAPTCHA',
+ REMOTE_CAPTCHA_POLL_INTERVAL_MINUTES: 'REMOTE_CAPTCHA_POLL_INTERVAL_MINUTES',
+ REMOTE_CAPTCHA_REOPEN_COOLDOWN_MINUTES: 'REMOTE_CAPTCHA_REOPEN_COOLDOWN_MINUTES'
 };
 
 // Clipboard observer
@@ -92,7 +95,7 @@ chrome.storage.session.setAccessLevel({ accessLevel: 'TRUSTED_AND_UNTRUSTED_CONT
 // ============================================================
 function addCspStrippingRule(tabId) {
  let ruleId = 10000 + tabId;
- chrome.declarativeNetRequest.updateSessionRules({
+ return chrome.declarativeNetRequest.updateSessionRules({
   addRules: [{
    id: ruleId,
    priority: 1,
@@ -112,6 +115,25 @@ function addCspStrippingRule(tabId) {
  }).catch(function(err) {
   console.error('Background: Failed to add CSP stripping rule for tab', tabId, err);
  });
+}
+
+/**
+ * Build the captcha-tab URL: absolute http(s), hash forced to #rc2jdt.
+ * JD sometimes returns a bare host, http:// contextUrl, or a URL that already
+ * carries a hash — all of which previously broke the content-script gate.
+ */
+function buildCaptchaTabUrl(targetUrl) {
+ if (!targetUrl || typeof targetUrl !== 'string') {
+  throw new Error('missing targetUrl');
+ }
+ var raw = targetUrl.trim();
+ if (!/^https?:\/\//i.test(raw)) {
+  raw = 'https://' + raw.replace(/^\/\//, '');
+ }
+ var u = new URL(raw);
+ if (u.protocol === 'http:') u.protocol = 'https:';
+ u.hash = 'rc2jdt';
+ return u.toString();
 }
 
 function removeCspStrippingRule(tabId) {
@@ -142,6 +164,7 @@ function isCaptchaApiScript(url) {
   return false;
  }
 }
+
 
 async function addLinkToRequestQueue(link, tab) {
  await queueReady;
@@ -406,6 +429,12 @@ async function initSettings() {
  settings[STORAGE_KEYS.CONTEXT_MENU_SIMPLE] = result[STORAGE_KEYS.CONTEXT_MENU_SIMPLE] ?? true;
  settings[STORAGE_KEYS.CLIPBOARD_OBSERVER] = result[STORAGE_KEYS.CLIPBOARD_OBSERVER] ?? false;
  settings[STORAGE_KEYS.DEFAULT_PREFERRED_JD] = result[STORAGE_KEYS.DEFAULT_PREFERRED_JD] || DEVICE_TYPES.ASK_EVERY_TIME;
+ // Opt-in: unset / never-configured => off. Explicit true/false in storage is preserved.
+ settings[STORAGE_KEYS.AUTO_OPEN_REMOTE_CAPTCHA] = result[STORAGE_KEYS.AUTO_OPEN_REMOTE_CAPTCHA] ?? false;
+ var pollMins = Number(result[STORAGE_KEYS.REMOTE_CAPTCHA_POLL_INTERVAL_MINUTES]);
+ settings[STORAGE_KEYS.REMOTE_CAPTCHA_POLL_INTERVAL_MINUTES] = (Number.isFinite(pollMins) && pollMins >= 1) ? pollMins : 1;
+ var coolMins = Number(result[STORAGE_KEYS.REMOTE_CAPTCHA_REOPEN_COOLDOWN_MINUTES]);
+ settings[STORAGE_KEYS.REMOTE_CAPTCHA_REOPEN_COOLDOWN_MINUTES] = (Number.isFinite(coolMins) && coolMins >= 1) ? coolMins : 2;
 
  if (settings[STORAGE_KEYS.CLICKNLOAD_ACTIVE]) {
   addCnlInterceptor();
@@ -423,6 +452,7 @@ async function initSettings() {
 
  initMenuItems();
  updateBadge();
+ syncRemoteCaptchaAlarm();
 
  // Warm start: hand the stored session to the offscreen document and set the
  // badge from its answer, without the user having to open the popup first.
@@ -556,6 +586,22 @@ chrome.storage.onChanged.addListener((changes) => {
  }
  if (changes[STORAGE_KEYS.DEFAULT_PREFERRED_JD]) {
   settings[STORAGE_KEYS.DEFAULT_PREFERRED_JD] = changes[STORAGE_KEYS.DEFAULT_PREFERRED_JD].newValue;
+ }
+ if (changes[STORAGE_KEYS.AUTO_OPEN_REMOTE_CAPTCHA]) {
+  settings[STORAGE_KEYS.AUTO_OPEN_REMOTE_CAPTCHA] = changes[STORAGE_KEYS.AUTO_OPEN_REMOTE_CAPTCHA].newValue;
+ }
+ if (changes[STORAGE_KEYS.REMOTE_CAPTCHA_POLL_INTERVAL_MINUTES]) {
+  var pm = Number(changes[STORAGE_KEYS.REMOTE_CAPTCHA_POLL_INTERVAL_MINUTES].newValue);
+  settings[STORAGE_KEYS.REMOTE_CAPTCHA_POLL_INTERVAL_MINUTES] = (Number.isFinite(pm) && pm >= 1) ? pm : 1;
+ }
+ if (changes[STORAGE_KEYS.REMOTE_CAPTCHA_REOPEN_COOLDOWN_MINUTES]) {
+  var cm = Number(changes[STORAGE_KEYS.REMOTE_CAPTCHA_REOPEN_COOLDOWN_MINUTES].newValue);
+  settings[STORAGE_KEYS.REMOTE_CAPTCHA_REOPEN_COOLDOWN_MINUTES] = (Number.isFinite(cm) && cm >= 1) ? cm : 2;
+ }
+ if (changes[STORAGE_KEYS.AUTO_OPEN_REMOTE_CAPTCHA]
+  || changes[STORAGE_KEYS.REMOTE_CAPTCHA_POLL_INTERVAL_MINUTES]
+  || changes[STORAGE_KEYS.REMOTE_CAPTCHA_REOPEN_COOLDOWN_MINUTES]) {
+  syncRemoteCaptchaAlarm();
  }
 });
 
@@ -731,6 +777,57 @@ chrome.webRequest.onBeforeRequest.addListener(
  ['requestBody']
 );
 
+
+// Park a CAPTCHA job for myjdCaptchaSolver.js and send the tab to the hoster's
+// own domain with #rc2jdt, where the widget can legally render. Shared by the
+// MyJDownloader web-interface flow and the remote MyJD captcha poller.
+async function prepareCaptchaTab(tabId, jobDetails, callbackUrl, flowName, sendResponse) {
+ try {
+  // The solver reports the token with the job's callbackUrl, which decides
+  // whether the solution is routed to my.jdownloader.org or to JDownloader's
+  // own callback URL, so it has to travel inside the job.
+  const job = Object.assign({}, jobDetails, { callbackUrl: callbackUrl });
+  await chrome.storage.session.set({ myjd_captcha_job: job });
+
+  const captchaUrl = buildCaptchaTabUrl(jobDetails.targetUrl);
+
+  // Remote / headless MyJD jobs arrive without a tab to reuse. Open one on
+  // the hoster domain so myjdCaptchaSolver.js can render the widget.
+  // Bootstrap via about:blank so we can await the CSP strip rule before the
+  // hoster main_frame response; then navigate to the final #rc2jdt URL.
+  var createdTab = false;
+  if (tabId == null || tabId < 0) {
+   const blankTab = await chrome.tabs.create({ url: 'about:blank', active: true });
+   tabId = blankTab.id;
+   createdTab = true;
+   await addCspStrippingRule(tabId);
+   await chrome.tabs.update(tabId, { url: captchaUrl });
+  } else {
+   await addCspStrippingRule(tabId);
+   await chrome.tabs.update(tabId, { url: captchaUrl });
+  }
+
+  activeCaptchaTabs[tabId] = {
+   callbackUrl: callbackUrl,
+   captchaId: jobDetails.captchaId,
+   captchaType: jobDetails.captchaType,
+   hoster: jobDetails.hoster,
+   deviceId: jobDetails.deviceId || null,
+   detectedAt: Date.now()
+  };
+  console.log('Background: ' + flowName + ' CAPTCHA tab prepared:', tabId, jobDetails.hoster, captchaUrl);
+  // Include tabId when we opened a fresh tab so the remote poller can track it;
+  // keep the classic {status:'ok'} shape when an existing tab was reused.
+  if (createdTab) {
+   sendResponse({ status: 'ok', tabId: tabId });
+  } else {
+   sendResponse({ status: 'ok' });
+  }
+ } catch (err) {
+  console.error('Background: Failed to prepare ' + flowName + ' CAPTCHA tab:', err);
+  sendResponse({ status: 'error', error: err.message });
+ }
+}
 
 // ============================================================
 // Message handler — central routing for popup, toolbar, content scripts
@@ -1008,33 +1105,25 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   return true;
  }
 
+
+ // webinterfaceEnhancer.js asks for the enhance-captcha-dialog flag on load.
+ // Answer it here (Rc2Service / BackgroundCtrl used to).
+ if (action === "settings" && request.name === "webinterface-enhancer") {
+  chrome.storage.local.get(['ENHANCE_CAPTCHA_DIALOG'], function(result) {
+   var active = result.ENHANCE_CAPTCHA_DIALOG;
+   if (active === undefined) active = true;
+   sendResponse({ active: !!active });
+  });
+  return true;
+ }
+
  // ============================================================
  // CAPTCHA tab tracking and message handling
  // ============================================================
 
  // MYJD CAPTCHA: prepare tab (write session storage, add CSP rule, navigate)
  if (action === "myjd-prepare-captcha-tab") {
-  (async () => {
-   try {
-    let tabId = request.data.tabId;
-    let jobDetails = request.data.jobDetails;
-    await chrome.storage.session.set({ myjd_captcha_job: jobDetails });
-    addCspStrippingRule(tabId);
-    chrome.tabs.update(tabId, { url: jobDetails.targetUrl + '#rc2jdt' });
-    activeCaptchaTabs[tabId] = {
-     callbackUrl: 'MYJD',
-     captchaId: jobDetails.captchaId,
-     captchaType: jobDetails.captchaType,
-     hoster: jobDetails.hoster,
-     detectedAt: Date.now()
-    };
-    console.log('Background: MYJD CAPTCHA tab prepared:', tabId, jobDetails.hoster);
-    sendResponse({ status: 'ok' });
-   } catch (err) {
-    console.error('Background: Failed to prepare MYJD CAPTCHA tab:', err);
-    sendResponse({ status: 'error', error: err.message });
-   }
-  })();
+  prepareCaptchaTab(request.data.tabId, request.data.jobDetails, 'MYJD', 'MYJD', sendResponse);
   return true;
  }
 
@@ -1057,6 +1146,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
    sendResponse({ status: 'error', error: 'url not allowed' });
    return true;
   }
+  // Same MAIN-world inject as 9aeddea (known-good widget render). Do not wrap
+  // in retry/head-park helpers — those regressed api.js loading on hoster pages.
   chrome.scripting.executeScript({
    target: { tabId: sender.tab.id },
    world: 'MAIN',
@@ -1120,11 +1211,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
  if (action === "captcha-tab-detected") {
   if (sender.tab) {
+   var prev = activeCaptchaTabs[sender.tab.id] || {};
+   // Preserve deviceId / MYJD captchaId from prepareCaptchaTab — the generic
+   // captchaSolverContentscript often reports nulls and would otherwise wipe
+   // the remote-solve routing info.
    activeCaptchaTabs[sender.tab.id] = {
-    callbackUrl: request.data.callbackUrl,
-    captchaType: request.data.captchaType,
-    hoster: request.data.hoster,
-    captchaId: request.data.captchaId,
+    callbackUrl: request.data.callbackUrl || prev.callbackUrl || null,
+    captchaType: request.data.captchaType || prev.captchaType || null,
+    hoster: request.data.hoster || prev.hoster || null,
+    captchaId: request.data.captchaId != null ? request.data.captchaId : prev.captchaId,
+    deviceId: request.data.deviceId || prev.deviceId || null,
     detectedAt: Date.now()
    };
    console.log('Background: CAPTCHA tab detected:', sender.tab.id, request.data.captchaType);
@@ -1134,40 +1230,104 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
  }
 
  if (action === "captcha-solved") {
-  if (sender.tab) {
-   delete activeCaptchaTabs[sender.tab.id];
-  }
-  if (request.data.callbackUrl === 'MYJD' && request.data.captchaId) {
-   // MYJD flow: route solution through my.jdownloader.org tabs
-   chrome.tabs.query({
-    url: ['http://my.jdownloader.org/*', 'https://my.jdownloader.org/*']
-   }, function(tabs) {
-    if (tabs && tabs.length > 0) {
-     for (var i = 0; i < tabs.length; i++) {
-      chrome.tabs.sendMessage(tabs[i].id, {
-       name: 'response',
-       type: 'myjdrc2',
-       data: { captchaId: request.data.captchaId, token: request.data.token }
-      }, function() { /* ignore errors */ });
-     }
-    }
-   });
-   // Auto-close sender tab and clean up CSP rule
-   if (sender.tab) {
-    removeCspStrippingRule(sender.tab.id);
-    setTimeout(function() {
-     chrome.tabs.remove(sender.tab.id, function() {
-      if (chrome.runtime.lastError) { /* ignore */ }
-     });
-    }, 2000);
+  (async function() {
+   var solvedTabInfo = sender.tab ? activeCaptchaTabs[sender.tab.id] : null;
+   var captchaId = request.data && request.data.captchaId;
+   var callbackUrl = request.data && request.data.callbackUrl;
+   var token = request.data && request.data.token;
+   var solvedDeviceId = (solvedTabInfo && solvedTabInfo.deviceId)
+    || (request.data && request.data.deviceId)
+    || (captchaId != null && remoteCaptchaOpen[captchaId]
+        && remoteCaptchaOpen[captchaId].deviceId)
+    || null;
+
+   // Session job is the durable source of truth across SW restarts and after
+   // captchaSolverContentscript overwrites activeCaptchaTabs without deviceId.
+   var sessionJob = null;
+   try {
+    var session = await chrome.storage.session.get('myjd_captcha_job');
+    sessionJob = session && session.myjd_captcha_job;
+   } catch (e) { /* ignore */ }
+   if (sessionJob) {
+    if (captchaId == null) captchaId = sessionJob.captchaId;
+    if (!callbackUrl) callbackUrl = sessionJob.callbackUrl;
+    if (!solvedDeviceId) solvedDeviceId = sessionJob.deviceId || null;
    }
-  } else if (request.data.callbackUrl && request.data.callbackUrl !== 'MYJD') {
-   // Localhost flow: submit token via HTTP GET.
-   // MV3 service workers have no XMLHttpRequest -> use fetch().
-   // AbortSignal.timeout covers ontimeout, the catch covers onerror.
-   (async function() {
+   // Last-resort: any remaining remoteCaptchaOpen entry for this hoster tab.
+   if (!solvedDeviceId && solvedTabInfo && solvedTabInfo.deviceId) {
+    solvedDeviceId = solvedTabInfo.deviceId;
+   }
+   if (!solvedDeviceId) {
+    var openIds = Object.keys(remoteCaptchaOpen || {});
+    if (openIds.length === 1) {
+     solvedDeviceId = remoteCaptchaOpen[openIds[0]].deviceId || null;
+     if (captchaId == null) captchaId = openIds[0];
+    }
+   }
+
+   if (sender.tab) {
+    delete activeCaptchaTabs[sender.tab.id];
+   }
+   if (captchaId != null) {
+    delete remoteCaptchaOpen[captchaId];
+   }
+
+   console.log('Background: captcha-solved', {
+    captchaId: captchaId,
+    captchaIdType: typeof captchaId,
+    callbackUrl: callbackUrl,
+    deviceId: solvedDeviceId,
+    tokenLen: token ? String(token).length : 0,
+    fromTab: sender.tab && sender.tab.id
+   });
+
+   if (callbackUrl === 'MYJD' && captchaId != null && token) {
+    var apiOk = false;
+    if (solvedDeviceId) {
+     try {
+      var apiResult = await solveCaptchaViaMyJdApi(solvedDeviceId, captchaId, token);
+      apiOk = !!(apiResult && apiResult.success);
+      if (apiOk) {
+       console.log('Background: CAPTCHA solved via MyJD API for', captchaId, apiResult);
+       try { await chrome.storage.session.remove('myjd_captcha_job'); } catch (e) {}
+      } else {
+       console.warn('Background: MyJD API solve failed, falling back to web UI tabs:',
+        apiResult && apiResult.error);
+      }
+     } catch (e) {
+      console.warn('Background: MyJD API solve threw, falling back to web UI tabs:', e);
+     }
+    } else {
+     console.warn('Background: captcha-solved MYJD but no deviceId — cannot call /captcha/solve');
+    }
+    if (!apiOk) {
+     chrome.tabs.query({
+      url: ['http://my.jdownloader.org/*', 'https://my.jdownloader.org/*']
+     }, function(tabs) {
+      if (tabs && tabs.length > 0) {
+       for (var i = 0; i < tabs.length; i++) {
+        chrome.tabs.sendMessage(tabs[i].id, {
+         name: 'response',
+         type: 'myjdrc2',
+         data: { captchaId: captchaId, token: token }
+        }, function() { /* ignore errors */ });
+       }
+      } else {
+       console.warn('Background: no my.jdownloader.org tabs for captcha fallback');
+      }
+     });
+    }
+    if (sender.tab) {
+     removeCspStrippingRule(sender.tab.id);
+     setTimeout(function() {
+      chrome.tabs.remove(sender.tab.id, function() {
+       if (chrome.runtime.lastError) { /* ignore */ }
+      });
+     }, 2000);
+    }
+   } else if (callbackUrl && callbackUrl !== 'MYJD' && token) {
     try {
-     var solveResponse = await fetch(request.data.callbackUrl + '&do=solve&response=' + encodeURIComponent(request.data.token), {
+     var solveResponse = await fetch(callbackUrl + '&do=solve&response=' + encodeURIComponent(token), {
       headers: { 'X-Myjd-Appkey': 'webextension-' + chrome.runtime.getManifest().version },
       signal: AbortSignal.timeout(10000)
      });
@@ -1176,7 +1336,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       if (sender.tab) {
        setTimeout(function() {
         chrome.tabs.remove(sender.tab.id, function() {
-         if (chrome.runtime.lastError) { /* ignore - tab may already be closed */ }
+         if (chrome.runtime.lastError) { /* ignore */ }
         });
        }, 2000);
       }
@@ -1184,12 +1344,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       console.error('Background: CAPTCHA submission failed, HTTP status:', solveResponse.status);
      }
     } catch (e) {
-     console.error('Background: CAPTCHA submission network error or timeout for', request.data.callbackUrl, e);
+     console.error('Background: CAPTCHA submission network error or timeout for', callbackUrl, e);
     }
-   })();
-  } else {
-   console.log('Background: CAPTCHA token captured (no JDownloader callback):', request.data.token.substring(0, 20) + '...');
-  }
+   } else {
+    console.log('Background: CAPTCHA token captured but not submitted', {
+     callbackUrl: callbackUrl, captchaId: captchaId, hasToken: !!token
+    });
+   }
+  })();
   sendResponse({ status: 'ok' });
   return true;
  }
@@ -1322,6 +1484,9 @@ chrome.tabs.onRemoved.addListener((tabId) => {
  if (activeCaptchaTabs[tabId]) {
   var info = activeCaptchaTabs[tabId];
   delete activeCaptchaTabs[tabId];
+  if (info.captchaId != null) {
+   markRemoteCaptchaClosed(info.captchaId);
+  }
   if (info.callbackUrl === 'MYJD') {
    // MYJD flow: send tab-closed to my.jdownloader.org tabs
    chrome.tabs.query({
@@ -1353,17 +1518,241 @@ chrome.tabs.onRemoved.addListener((tabId) => {
  }
 });
 
+
+// ============================================================
+// Remote MyJD captcha poller
+// ============================================================
+// Headless / Docker JDs never open a local captcha tab. While the user is
+// logged in, poll each device's /captcha/list via jdapi (Direct Connection or
+// cloud relay — never a hardcoded api.jdownloader.org URL) and open a browser
+// tab for solvable hCaptcha / reCAPTCHA challenges.
+const REMOTE_CAPTCHA_ALARM = 'remoteCaptchaPoll';
+// chrome.alarms MV3 floor is 1 minute; shorter periods are clamped.
+const REMOTE_CAPTCHA_DEFAULT_PERIOD_MINUTES = 1;
+const REMOTE_CAPTCHA_DEFAULT_COOLDOWN_MINUTES = 2;
+
+function getRemoteCaptchaPollIntervalMinutes() {
+ var v = Number(settings[STORAGE_KEYS.REMOTE_CAPTCHA_POLL_INTERVAL_MINUTES]);
+ if (!Number.isFinite(v) || v < 1) v = REMOTE_CAPTCHA_DEFAULT_PERIOD_MINUTES;
+ return v;
+}
+
+function getRemoteCaptchaCooldownMs() {
+ var v = Number(settings[STORAGE_KEYS.REMOTE_CAPTCHA_REOPEN_COOLDOWN_MINUTES]);
+ if (!Number.isFinite(v) || v < 1) v = REMOTE_CAPTCHA_DEFAULT_COOLDOWN_MINUTES;
+ return v * 60 * 1000;
+}
+
+
+// captchaId -> { tabId, deviceId, openedAt }
+const remoteCaptchaOpen = {};
+// captchaId -> timestamp when the user (or we) closed the tab; suppresses reopen
+const remoteCaptchaCooldown = {};
+
+function mapCaptchaJobToDetails(job, challenge, deviceId) {
+ const captchaType = (job && (job.challengeType || job.type)) || (challenge && challenge.type) || '';
+ const siteKey = challenge && challenge.siteKey;
+ const targetUrl = challenge && (challenge.siteUrl || challenge.contextUrl);
+ return {
+  captchaId: job && job.id,
+  captchaType: captchaType,
+  hoster: (job && job.hoster) || '',
+  siteKey: siteKey,
+  siteKeyType: challenge && challenge.type,
+  v3action: challenge && challenge.v3Action,
+  targetUrl: targetUrl,
+  callbackUrl: 'MYJD',
+  deviceId: deviceId
+ };
+}
+
+function isBrowserSolvableCaptcha(jobDetails) {
+ if (!jobDetails || !jobDetails.siteKey || !jobDetails.targetUrl) return false;
+ const t = String(jobDetails.captchaType || jobDetails.siteKeyType || '').toLowerCase();
+ // Accept explicit browser-widget types, or any challenge that already carries
+ // a siteKey + hoster URL (image captchas do not).
+ if (/hcaptcha|h-?captcha|recaptcha|recaptchav2|recaptchav3/.test(t)) return true;
+ return !!(jobDetails.siteKey && jobDetails.targetUrl);
+}
+
+function findTabIdForCaptcha(captchaId) {
+ for (const [tabId, info] of Object.entries(activeCaptchaTabs)) {
+  if (info && String(info.captchaId) === String(captchaId)) return Number(tabId);
+ }
+ if (remoteCaptchaOpen[captchaId]) return remoteCaptchaOpen[captchaId].tabId;
+ return null;
+}
+
+function isCaptchaOnCooldown(captchaId) {
+ const closedAt = remoteCaptchaCooldown[captchaId];
+ if (!closedAt) return false;
+ if (Date.now() - closedAt < getRemoteCaptchaCooldownMs()) return true;
+ delete remoteCaptchaCooldown[captchaId];
+ return false;
+}
+
+function markRemoteCaptchaClosed(captchaId) {
+ if (captchaId == null) return;
+ remoteCaptchaCooldown[captchaId] = Date.now();
+ delete remoteCaptchaOpen[captchaId];
+}
+
+async function solveCaptchaViaMyJdApi(deviceId, captchaId, token) {
+ if (!deviceId || captchaId == null || !token) {
+  return { success: false, error: 'missing deviceId/captchaId/token' };
+ }
+ return sendToOffscreen('offscreen-captcha-solve', {
+  deviceId: deviceId,
+  captchaId: captchaId,
+  token: token
+ });
+}
+
+async function pruneStaleRemoteCaptchaOpen() {
+ const ids = Object.keys(remoteCaptchaOpen);
+ for (const id of ids) {
+  const entry = remoteCaptchaOpen[id];
+  if (!entry || entry.tabId == null) continue;
+  try {
+   await chrome.tabs.get(entry.tabId);
+  } catch (e) {
+   delete remoteCaptchaOpen[id];
+   if (activeCaptchaTabs[entry.tabId]) delete activeCaptchaTabs[entry.tabId];
+  }
+ }
+}
+
+async function pollRemoteCaptchas() {
+ // Opt-in: only poll when explicitly enabled.
+ if (settings[STORAGE_KEYS.AUTO_OPEN_REMOTE_CAPTCHA] !== true) return;
+ if (!state.isConnected) return;
+
+ await pruneStaleRemoteCaptchaOpen();
+
+ let devicesResult;
+ try {
+  devicesResult = await sendToOffscreen('offscreen-get-devices');
+ } catch (e) {
+  console.warn('Background: remote captcha poll devices failed:', e);
+  return;
+ }
+ if (!devicesResult || devicesResult.error || !devicesResult.success) return;
+
+ let devices = devicesResult.devices;
+ if (devices && devices.list && Array.isArray(devices.list)) devices = devices.list;
+ if (!Array.isArray(devices)) return;
+
+ const seenIds = new Set();
+
+ for (const device of devices) {
+  if (!device || !device.id) continue;
+  let listResult;
+  try {
+   listResult = await sendToOffscreen('offscreen-captcha-list', { deviceId: device.id });
+  } catch (e) {
+   console.warn('Background: captcha list failed for', device.id, e);
+   continue;
+  }
+  if (!listResult || !listResult.success) {
+   // Per-device failure must not abort the rest of the poll (direct-conn blip).
+   console.warn('Background: captcha list unsuccessful for', device.id, listResult && listResult.error);
+   continue;
+  }
+  const jobs = Array.isArray(listResult.jobs) ? listResult.jobs : [];
+  for (const job of jobs) {
+   if (!job || job.id == null) continue;
+   const captchaId = job.id;
+   seenIds.add(String(captchaId));
+
+   if (findTabIdForCaptcha(captchaId) != null) continue;
+   if (isCaptchaOnCooldown(captchaId)) continue;
+   if (remoteCaptchaOpen[captchaId]) continue;
+
+   let detailResult;
+   try {
+    detailResult = await sendToOffscreen('offscreen-captcha-get', {
+     deviceId: device.id,
+     captchaId: captchaId
+    });
+   } catch (e) {
+    console.warn('Background: captcha get failed for', captchaId, e);
+    continue;
+   }
+   if (!detailResult || !detailResult.success) continue;
+
+   const jobDetails = mapCaptchaJobToDetails(detailResult.job || job, detailResult.challenge, device.id);
+   if (!isBrowserSolvableCaptcha(jobDetails)) {
+    console.log('Background: skipping non-browser captcha', captchaId, jobDetails.captchaType);
+    continue;
+   }
+
+   // Reserve before await so overlapping poll ticks do not double-open.
+   remoteCaptchaOpen[captchaId] = { tabId: null, deviceId: device.id, openedAt: Date.now() };
+
+   await new Promise((resolve) => {
+    prepareCaptchaTab(null, jobDetails, 'MYJD', 'remote MyJD', function(resp) {
+     if (resp && resp.status === 'ok' && resp.tabId != null) {
+      remoteCaptchaOpen[captchaId] = {
+       tabId: resp.tabId,
+       deviceId: device.id,
+       openedAt: Date.now()
+      };
+      console.log('Background: opened remote captcha tab', resp.tabId, 'for', jobDetails.hoster, captchaId);
+     } else {
+      delete remoteCaptchaOpen[captchaId];
+      console.warn('Background: failed to open remote captcha tab', resp);
+     }
+     resolve();
+    });
+   });
+  }
+ }
+
+ // Clean up tracking for captchas that disappeared from every device list.
+ for (const id of Object.keys(remoteCaptchaOpen)) {
+  if (!seenIds.has(String(id))) {
+   const entry = remoteCaptchaOpen[id];
+   delete remoteCaptchaOpen[id];
+   if (entry && entry.tabId != null && activeCaptchaTabs[entry.tabId]) {
+    // Captcha expired/solved elsewhere — leave the tab; user can close it.
+    // Just drop our reservation so a future job can reopen if needed.
+   }
+  }
+ }
+}
+
+function syncRemoteCaptchaAlarm() {
+ if (settings[STORAGE_KEYS.AUTO_OPEN_REMOTE_CAPTCHA] === true) {
+  chrome.alarms.create(REMOTE_CAPTCHA_ALARM, {
+   delayInMinutes: 0.1,
+   periodInMinutes: getRemoteCaptchaPollIntervalMinutes()
+  });
+ } else {
+  chrome.alarms.clear(REMOTE_CAPTCHA_ALARM);
+ }
+}
+
+
 // ============================================================
 // Keep alive + init
 // ============================================================
 chrome.alarms.create('keepAlive', { periodInMinutes: 4 });
 chrome.alarms.create(UPDATE_CHECK_ALARM, { delayInMinutes: 1, periodInMinutes: 24 * 60 });
+syncRemoteCaptchaAlarm();
 chrome.alarms.onAlarm.addListener((alarm) => {
  if (alarm && alarm.name === UPDATE_CHECK_ALARM) {
   checkForUpdate();
   return;
  }
+ if (alarm && alarm.name === REMOTE_CAPTCHA_ALARM) {
+  pollRemoteCaptchas().catch(function(e) {
+   console.warn('Background: remote captcha poll error:', e);
+  });
+  return;
+ }
  console.log("Background: Keepalive alarm");
+ // Opportunistic poll when the SW wakes for keepAlive too.
+ pollRemoteCaptchas().catch(function() { /* ignore */ });
 });
 
 chrome.runtime.onInstalled.addListener(initSettings);

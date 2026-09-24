@@ -20,6 +20,9 @@ angular.module('myjdWebextensionApp')
             this.SETTINGS_DEFAULT_AUTOEXTRACT = "DEFAULT_AUTOEXTRACT";
             this.SETTINGS_ENHANCE_CAPTCHA_DIALOG = "ENHANCE_CAPTCHA_DIALOG";
             this.SETTINGS_CAPTCHA_PRIVACY_MODE = "CAPTCHA_PRIVACY_MODE";
+            this.SETTINGS_AUTO_OPEN_REMOTE_CAPTCHA = "AUTO_OPEN_REMOTE_CAPTCHA";
+            this.SETTINGS_REMOTE_CAPTCHA_POLL_INTERVAL_MINUTES = "REMOTE_CAPTCHA_POLL_INTERVAL_MINUTES";
+            this.SETTINGS_REMOTE_CAPTCHA_REOPEN_COOLDOWN_MINUTES = "REMOTE_CAPTCHA_REOPEN_COOLDOWN_MINUTES";
             this.SETTINGS_DEFAULT_OVERWRITE_PACKAGIZER = "DEFAULT_OVERWRITE_PACKAGIZER";
             this.SETTINGS_CLICKNLOAD_ACTIVE = "CLICKNLOAD_ACTIVE";
             this.SaveForLaterDevice = {id: "SaveForLaterDevice", name: "Save for later"};
@@ -56,6 +59,9 @@ angular.module('myjdWebextensionApp')
                 COUNTDOWN_VALUE: {key: StorageService.SETTINGS_COUNTDOWN_VALUE, defaultValue: 3},
                 CLIPBOARD_OBSERVER: {key: StorageService.SETTINGS_CLIPBOARD_OBSERVER, defaultValue: false},
                 CAPTCHA_PRIVACY_MODE: {key: StorageService.SETTINGS_CAPTCHA_PRIVACY_MODE, defaultValue: true},
+                AUTO_OPEN_REMOTE_CAPTCHA: {key: StorageService.SETTINGS_AUTO_OPEN_REMOTE_CAPTCHA, defaultValue: false},
+                REMOTE_CAPTCHA_POLL_INTERVAL_MINUTES: {key: StorageService.SETTINGS_REMOTE_CAPTCHA_POLL_INTERVAL_MINUTES, defaultValue: 1},
+                REMOTE_CAPTCHA_REOPEN_COOLDOWN_MINUTES: {key: StorageService.SETTINGS_REMOTE_CAPTCHA_REOPEN_COOLDOWN_MINUTES, defaultValue: 2},
                 CONTEXT_MENU_SIMPLE: {key: StorageService.SETTINGS_CONTEXT_MENU_SIMPLE, defaultValue: true},
                 DEFAULT_PREFERRED_JD: {
                     key: StorageService.SETTINGS_DEFAULT_PREFERRED_JD,
