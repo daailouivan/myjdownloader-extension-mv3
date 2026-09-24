@@ -32,15 +32,20 @@ describe('MYJD CAPTCHA Solver Content Script', function() {
     });
   });
 
-  describe('DOM replacement', function() {
-    it('should call document.open for DOM replacement', function() {
-      expect(csSource).toMatch(/document\.open/);
-    });
-    it('should call document.close', function() {
-      expect(csSource).toMatch(/document\.close/);
-    });
-    it('should have clearDocument defense', function() {
+  describe('DOM wipe', function() {
+    it('should have clearDocument defense that removes foreign bodies', function() {
       expect(csSource).toMatch(/clearDocument/);
+      expect(csSource).toMatch(/DOMContentLoaded/);
+      expect(csSource).toMatch(/myjd-captcha-body/);
+    });
+    it('should use document.open/close for DOM replacement (9aeddea known-good path)', function() {
+      expect(csSource).toMatch(/document\.open\(\)/);
+      expect(csSource).toMatch(/document\.close\(\)/);
+    });
+    it('should reuse document.body after open/close instead of appending a second body', function() {
+      expect(csSource).toMatch(/var body = document\.body/);
+      // Only append a new body when document.body is missing after open/close.
+      expect(csSource).toMatch(/if \(!body\)/);
     });
     it('should have DOMContentLoaded defense for foreign body removal', function() {
       expect(csSource).toMatch(/DOMContentLoaded/);

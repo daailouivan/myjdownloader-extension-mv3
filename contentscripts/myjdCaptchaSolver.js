@@ -6,12 +6,21 @@ if (!location.hash.startsWith('#rc2jdt')) return;
 
 // --- DOM replacement (defense-in-depth) ---
 
-// Strategy 1: Immediately replace the entire document
+// Strategy 1: Replace the document the same way the known-good 9aeddea build
+// did (document.open/close). That path successfully loaded hCaptcha api.js;
+// later "in-place wipe" experiments regressed it. Only change vs 9aeddea:
+// reuse document.body after open/close instead of appending a second <body>,
+// which left a blank-looking page in some browsers (double-body).
 document.open();
 document.close();
 
-// Build placeholder DOM using createElement only (no inline scripts)
-var body = document.createElement('body');
+var body = document.body;
+if (!body) {
+    body = document.createElement('body');
+    document.documentElement.appendChild(body);
+} else {
+    while (body.firstChild) body.removeChild(body.firstChild);
+}
 body.id = 'myjd-captcha-body';
 body.style.background = '#3c686f';
 body.style.color = '#fff';
@@ -24,7 +33,6 @@ loadingMsg.style.textAlign = 'center';
 loadingMsg.style.fontSize = '18px';
 loadingMsg.style.marginTop = '40px';
 body.appendChild(loadingMsg);
-document.documentElement.appendChild(body);
 
 // Strategy 2: On readystatechange, clear foreign DOM
 var clearDocument = function() {
