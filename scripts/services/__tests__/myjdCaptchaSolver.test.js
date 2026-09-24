@@ -43,7 +43,7 @@ describe('MYJD CAPTCHA Solver Content Script', function() {
       expect(csSource).toMatch(/document\.close\(\)/);
     });
     it('should reuse document.body after open/close instead of appending a second body', function() {
-      expect(csSource).toMatch(/var body = document\.body/);
+      expect(csSource).toMatch(/body = document\.body/);
       // Only append a new body when document.body is missing after open/close.
       expect(csSource).toMatch(/if \(!body\)/);
     });
@@ -53,10 +53,29 @@ describe('MYJD CAPTCHA Solver Content Script', function() {
     });
   });
 
-  describe('Session storage', function() {
-    it('should read myjd_captcha_job from chrome.storage.session', function() {
+  describe('Parked job handoff', function() {
+    it('should ask the background for the parked job before document.open', function() {
+      expect(csSource).toMatch(/myjd-captcha-get-job/);
+      expect(csSource).toMatch(/function\s+loadCaptchaJob/);
+      // Startup order: loadCaptchaJob(...) runs first; beginSolverUi (which
+      // calls document.open) only runs inside that callback after a job resolves.
+      var loadCallIdx = csSource.indexOf('loadCaptchaJob(function(job)');
+      var beginIdx = csSource.indexOf('function beginSolverUi');
+      var openInBegin = csSource.indexOf('document.open();', beginIdx);
+      expect(loadCallIdx).toBeGreaterThan(-1);
+      expect(beginIdx).toBeGreaterThan(-1);
+      expect(openInBegin).toBeGreaterThan(beginIdx);
+      // The success path calls beginSolverUi only after loadCaptchaJob's callback.
+      var successBegin = csSource.indexOf('beginSolverUi();', loadCallIdx);
+      expect(successBegin).toBeGreaterThan(loadCallIdx);
+    });
+    it('should fall back to chrome.storage.session myjd_captcha_job', function() {
       expect(csSource).toMatch(/chrome\.storage\.session\.get/);
       expect(csSource).toMatch(/myjd_captcha_job/);
+    });
+    it('should show the No CAPTCHA job found error when the handoff misses', function() {
+      expect(csSource).toMatch(/No CAPTCHA job found/);
+      expect(csSource).toMatch(/function\s+showNoJobError/);
     });
   });
 

@@ -86,6 +86,34 @@ describe('Manual remote MyJD captcha open (icon click)', () => {
     });
   });
 
+
+  describe('park-before-open handoff order', () => {
+    const prepareSrc = extractFunction(bgSource, 'prepareCaptchaTab');
+
+    it('awaits sessionAccessReady then writes myjd_captcha_job before tabs.create/update', () => {
+      expect(bgSource).toMatch(/const sessionAccessReady = chrome\.storage\.session\.setAccessLevel/);
+      expect(prepareSrc).toMatch(/await sessionAccessReady/);
+      const setIdx = prepareSrc.indexOf("chrome.storage.session.set({ myjd_captcha_job");
+      const createIdx = prepareSrc.indexOf('chrome.tabs.create');
+      const updateIdx = prepareSrc.indexOf('chrome.tabs.update');
+      expect(setIdx).toBeGreaterThan(-1);
+      expect(createIdx).toBeGreaterThan(setIdx);
+      expect(updateIdx).toBeGreaterThan(setIdx);
+    });
+
+    it('registers activeCaptchaTabs before navigating to the hoster URL', () => {
+      const trackIdx = prepareSrc.indexOf('activeCaptchaTabs[tabId]');
+      const updateIdx = prepareSrc.indexOf('chrome.tabs.update');
+      expect(trackIdx).toBeGreaterThan(-1);
+      expect(updateIdx).toBeGreaterThan(trackIdx);
+    });
+
+    it('exposes myjd-captcha-get-job so the content script can read the parked job via the SW', () => {
+      expect(bgSource).toMatch(/action === ["']myjd-captcha-get-job["']/);
+      expect(bgSource).toMatch(/chrome\.storage\.session\.get\(['"]myjd_captcha_job['"]\)/);
+    });
+  });
+
   describe('prepareCaptchaTab creates a tab when tabId is missing', () => {
     it('source calls chrome.tabs.create when tabId is null', () => {
       expect(bgSource).toMatch(/tabs\.create\(\s*\{\s*url:\s*'about:blank'/);

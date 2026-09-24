@@ -84,8 +84,15 @@ function persistQueue() {
 
 let queueReady = restoreRequestQueue();
 
-// Make chrome.storage.session accessible from content scripts (for myjdCaptchaSolver.js)
-chrome.storage.session.setAccessLevel({ accessLevel: 'TRUSTED_AND_UNTRUSTED_CONTEXTS' });
+// Make chrome.storage.session accessible from content scripts (for myjdCaptchaSolver.js).
+// Await this before parking/opening a captcha tab — otherwise the content script's
+// session.get can return empty under the default TRUSTED_CONTEXTS-only level.
+const sessionAccessReady = chrome.storage.session.setAccessLevel({
+ accessLevel: 'TRUSTED_AND_UNTRUSTED_CONTEXTS'
+}).catch(function(err) {
+ // Already set for this extension lifetime, or unsupported — continue either way.
+ console.warn('Background: setAccessLevel for session storage:', err && err.message ? err.message : err);
+});
 
 // ============================================================
 // MYJD CAPTCHA CSP rule management
@@ -753,9 +760,14 @@ chrome.webRequest.onBeforeRequest.addListener(
 
 async function prepareCaptchaTab(tabId, jobDetails, callbackUrl, flowName, sendResponse) {
  try {
+  // Content scripts only see session keys after setAccessLevel settles.
+  await sessionAccessReady;
+
   // The solver reports the token with the job's callbackUrl, which decides
   // whether the solution is routed to my.jdownloader.org or to JDownloader's
   // own callback URL, so it has to travel inside the job.
+  // PARK BEFORE OPEN: write myjd_captcha_job, then navigate. The content script
+  // (and myjd-captcha-get-job) must find the job as soon as #rc2jdt loads.
   const job = Object.assign({}, jobDetails, { callbackUrl: callbackUrl });
   await chrome.storage.session.set({ myjd_captcha_job: job });
 
@@ -770,13 +782,10 @@ async function prepareCaptchaTab(tabId, jobDetails, callbackUrl, flowName, sendR
    const blankTab = await chrome.tabs.create({ url: 'about:blank', active: true });
    tabId = blankTab.id;
    createdTab = true;
-   await addCspStrippingRule(tabId);
-   await chrome.tabs.update(tabId, { url: captchaUrl });
-  } else {
-   await addCspStrippingRule(tabId);
-   await chrome.tabs.update(tabId, { url: captchaUrl });
   }
 
+  // Track before navigate so a document_start get-job message can resolve
+  // captchaId/deviceId even if session read races.
   activeCaptchaTabs[tabId] = {
    callbackUrl: callbackUrl,
    captchaId: jobDetails.captchaId,
@@ -785,6 +794,10 @@ async function prepareCaptchaTab(tabId, jobDetails, callbackUrl, flowName, sendR
    deviceId: jobDetails.deviceId || null,
    detectedAt: Date.now()
   };
+
+  await addCspStrippingRule(tabId);
+  await chrome.tabs.update(tabId, { url: captchaUrl });
+
   console.log('Background: ' + flowName + ' CAPTCHA tab prepared:', tabId, jobDetails.hoster, captchaUrl);
   // Include tabId when we opened a fresh tab so the manual open path can track it;
   // keep the classic {status:'ok'} shape when an existing tab was reused.
@@ -1106,6 +1119,24 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
  // MYJD CAPTCHA: prepare tab (write session storage, add CSP rule, navigate)
  if (action === "myjd-prepare-captcha-tab") {
   prepareCaptchaTab(request.data.tabId, request.data.jobDetails, 'MYJD', 'MYJD', sendResponse);
+  return true;
+ }
+
+ // MYJD CAPTCHA: content script asks the SW for the parked job. The SW is a
+ // trusted context, so this works even when session setAccessLevel has not
+ // yet exposed keys to untrusted content scripts (or document.open disrupted
+ // a direct session.get).
+ if (action === "myjd-captcha-get-job") {
+  chrome.storage.session.get('myjd_captcha_job').then(function(result) {
+   var job = result && result.myjd_captcha_job;
+   if (job) {
+    sendResponse({ status: 'ok', job: job });
+    return;
+   }
+   sendResponse({ status: 'error', error: 'no job' });
+  }).catch(function(err) {
+   sendResponse({ status: 'error', error: err && err.message });
+  });
   return true;
  }
 
