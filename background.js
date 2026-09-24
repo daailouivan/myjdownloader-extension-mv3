@@ -8,7 +8,9 @@ const STORAGE_KEYS = {
  CONTEXT_MENU_SIMPLE: 'CONTEXT_MENU_SIMPLE',
  CLIPBOARD_OBSERVER: 'CLIPBOARD_OBSERVER',
  DEFAULT_PREFERRED_JD: 'DEFAULT_PREFERRED_JD',
- AUTO_OPEN_REMOTE_CAPTCHA: 'AUTO_OPEN_REMOTE_CAPTCHA'
+ AUTO_OPEN_REMOTE_CAPTCHA: 'AUTO_OPEN_REMOTE_CAPTCHA',
+ REMOTE_CAPTCHA_POLL_INTERVAL_MINUTES: 'REMOTE_CAPTCHA_POLL_INTERVAL_MINUTES',
+ REMOTE_CAPTCHA_REOPEN_COOLDOWN_MINUTES: 'REMOTE_CAPTCHA_REOPEN_COOLDOWN_MINUTES'
 };
 
 // Clipboard observer
@@ -427,7 +429,12 @@ async function initSettings() {
  settings[STORAGE_KEYS.CONTEXT_MENU_SIMPLE] = result[STORAGE_KEYS.CONTEXT_MENU_SIMPLE] ?? true;
  settings[STORAGE_KEYS.CLIPBOARD_OBSERVER] = result[STORAGE_KEYS.CLIPBOARD_OBSERVER] ?? false;
  settings[STORAGE_KEYS.DEFAULT_PREFERRED_JD] = result[STORAGE_KEYS.DEFAULT_PREFERRED_JD] || DEVICE_TYPES.ASK_EVERY_TIME;
- settings[STORAGE_KEYS.AUTO_OPEN_REMOTE_CAPTCHA] = result[STORAGE_KEYS.AUTO_OPEN_REMOTE_CAPTCHA] ?? true;
+ // Opt-in: unset / never-configured => off. Explicit true/false in storage is preserved.
+ settings[STORAGE_KEYS.AUTO_OPEN_REMOTE_CAPTCHA] = result[STORAGE_KEYS.AUTO_OPEN_REMOTE_CAPTCHA] ?? false;
+ var pollMins = Number(result[STORAGE_KEYS.REMOTE_CAPTCHA_POLL_INTERVAL_MINUTES]);
+ settings[STORAGE_KEYS.REMOTE_CAPTCHA_POLL_INTERVAL_MINUTES] = (Number.isFinite(pollMins) && pollMins >= 1) ? pollMins : 1;
+ var coolMins = Number(result[STORAGE_KEYS.REMOTE_CAPTCHA_REOPEN_COOLDOWN_MINUTES]);
+ settings[STORAGE_KEYS.REMOTE_CAPTCHA_REOPEN_COOLDOWN_MINUTES] = (Number.isFinite(coolMins) && coolMins >= 1) ? coolMins : 2;
 
  if (settings[STORAGE_KEYS.CLICKNLOAD_ACTIVE]) {
   addCnlInterceptor();
@@ -445,6 +452,7 @@ async function initSettings() {
 
  initMenuItems();
  updateBadge();
+ syncRemoteCaptchaAlarm();
 
  // Warm start: hand the stored session to the offscreen document and set the
  // badge from its answer, without the user having to open the popup first.
@@ -581,6 +589,19 @@ chrome.storage.onChanged.addListener((changes) => {
  }
  if (changes[STORAGE_KEYS.AUTO_OPEN_REMOTE_CAPTCHA]) {
   settings[STORAGE_KEYS.AUTO_OPEN_REMOTE_CAPTCHA] = changes[STORAGE_KEYS.AUTO_OPEN_REMOTE_CAPTCHA].newValue;
+ }
+ if (changes[STORAGE_KEYS.REMOTE_CAPTCHA_POLL_INTERVAL_MINUTES]) {
+  var pm = Number(changes[STORAGE_KEYS.REMOTE_CAPTCHA_POLL_INTERVAL_MINUTES].newValue);
+  settings[STORAGE_KEYS.REMOTE_CAPTCHA_POLL_INTERVAL_MINUTES] = (Number.isFinite(pm) && pm >= 1) ? pm : 1;
+ }
+ if (changes[STORAGE_KEYS.REMOTE_CAPTCHA_REOPEN_COOLDOWN_MINUTES]) {
+  var cm = Number(changes[STORAGE_KEYS.REMOTE_CAPTCHA_REOPEN_COOLDOWN_MINUTES].newValue);
+  settings[STORAGE_KEYS.REMOTE_CAPTCHA_REOPEN_COOLDOWN_MINUTES] = (Number.isFinite(cm) && cm >= 1) ? cm : 2;
+ }
+ if (changes[STORAGE_KEYS.AUTO_OPEN_REMOTE_CAPTCHA]
+  || changes[STORAGE_KEYS.REMOTE_CAPTCHA_POLL_INTERVAL_MINUTES]
+  || changes[STORAGE_KEYS.REMOTE_CAPTCHA_REOPEN_COOLDOWN_MINUTES]) {
+  syncRemoteCaptchaAlarm();
  }
 });
 
@@ -1520,8 +1541,21 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 // tab for solvable hCaptcha / reCAPTCHA challenges.
 const REMOTE_CAPTCHA_ALARM = 'remoteCaptchaPoll';
 // chrome.alarms MV3 floor is 1 minute; shorter periods are clamped.
-const REMOTE_CAPTCHA_PERIOD_MINUTES = 1;
-const REMOTE_CAPTCHA_COOLDOWN_MS = 2 * 60 * 1000;
+const REMOTE_CAPTCHA_DEFAULT_PERIOD_MINUTES = 1;
+const REMOTE_CAPTCHA_DEFAULT_COOLDOWN_MINUTES = 2;
+
+function getRemoteCaptchaPollIntervalMinutes() {
+ var v = Number(settings[STORAGE_KEYS.REMOTE_CAPTCHA_POLL_INTERVAL_MINUTES]);
+ if (!Number.isFinite(v) || v < 1) v = REMOTE_CAPTCHA_DEFAULT_PERIOD_MINUTES;
+ return v;
+}
+
+function getRemoteCaptchaCooldownMs() {
+ var v = Number(settings[STORAGE_KEYS.REMOTE_CAPTCHA_REOPEN_COOLDOWN_MINUTES]);
+ if (!Number.isFinite(v) || v < 1) v = REMOTE_CAPTCHA_DEFAULT_COOLDOWN_MINUTES;
+ return v * 60 * 1000;
+}
+
 
 // captchaId -> { tabId, deviceId, openedAt }
 const remoteCaptchaOpen = {};
@@ -1565,7 +1599,7 @@ function findTabIdForCaptcha(captchaId) {
 function isCaptchaOnCooldown(captchaId) {
  const closedAt = remoteCaptchaCooldown[captchaId];
  if (!closedAt) return false;
- if (Date.now() - closedAt < REMOTE_CAPTCHA_COOLDOWN_MS) return true;
+ if (Date.now() - closedAt < getRemoteCaptchaCooldownMs()) return true;
  delete remoteCaptchaCooldown[captchaId];
  return false;
 }
@@ -1602,7 +1636,8 @@ async function pruneStaleRemoteCaptchaOpen() {
 }
 
 async function pollRemoteCaptchas() {
- if (settings[STORAGE_KEYS.AUTO_OPEN_REMOTE_CAPTCHA] === false) return;
+ // Opt-in: only poll when explicitly enabled.
+ if (settings[STORAGE_KEYS.AUTO_OPEN_REMOTE_CAPTCHA] !== true) return;
  if (!state.isConnected) return;
 
  await pruneStaleRemoteCaptchaOpen();
@@ -1699,11 +1734,15 @@ async function pollRemoteCaptchas() {
  }
 }
 
-function ensureRemoteCaptchaAlarm() {
- chrome.alarms.create(REMOTE_CAPTCHA_ALARM, {
-  delayInMinutes: 0.1,
-  periodInMinutes: REMOTE_CAPTCHA_PERIOD_MINUTES
- });
+function syncRemoteCaptchaAlarm() {
+ if (settings[STORAGE_KEYS.AUTO_OPEN_REMOTE_CAPTCHA] === true) {
+  chrome.alarms.create(REMOTE_CAPTCHA_ALARM, {
+   delayInMinutes: 0.1,
+   periodInMinutes: getRemoteCaptchaPollIntervalMinutes()
+  });
+ } else {
+  chrome.alarms.clear(REMOTE_CAPTCHA_ALARM);
+ }
 }
 
 
@@ -1712,7 +1751,7 @@ function ensureRemoteCaptchaAlarm() {
 // ============================================================
 chrome.alarms.create('keepAlive', { periodInMinutes: 4 });
 chrome.alarms.create(UPDATE_CHECK_ALARM, { delayInMinutes: 1, periodInMinutes: 24 * 60 });
-ensureRemoteCaptchaAlarm();
+syncRemoteCaptchaAlarm();
 chrome.alarms.onAlarm.addListener((alarm) => {
  if (alarm && alarm.name === UPDATE_CHECK_ALARM) {
   checkForUpdate();

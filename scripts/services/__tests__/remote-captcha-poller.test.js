@@ -130,7 +130,8 @@ describe('Remote MyJD captcha poller', () => {
     it('tracks remoteCaptchaOpen and remoteCaptchaCooldown', () => {
       expect(bgSource).toMatch(/const remoteCaptchaOpen = \{\}/);
       expect(bgSource).toMatch(/const remoteCaptchaCooldown = \{\}/);
-      expect(bgSource).toMatch(/REMOTE_CAPTCHA_COOLDOWN_MS/);
+      expect(bgSource).toMatch(/getRemoteCaptchaCooldownMs/);
+      expect(bgSource).toMatch(/REMOTE_CAPTCHA_REOPEN_COOLDOWN_MINUTES/);
       expect(bgSource).toMatch(/function markRemoteCaptchaClosed/);
       expect(bgSource).toMatch(/function findTabIdForCaptcha/);
     });
@@ -184,15 +185,38 @@ describe('Remote MyJD captcha poller', () => {
   });
 
   describe('alarm / setting', () => {
-    it('registers a remoteCaptchaPoll alarm at the MV3 1-minute floor', () => {
+    it('syncs remoteCaptchaPoll alarm from the configured interval (MV3 1-minute floor)', () => {
       expect(bgSource).toMatch(/REMOTE_CAPTCHA_ALARM\s*=\s*['"]remoteCaptchaPoll['"]/);
-      expect(bgSource).toMatch(/REMOTE_CAPTCHA_PERIOD_MINUTES\s*=\s*1/);
-      expect(bgSource).toMatch(/ensureRemoteCaptchaAlarm/);
+      expect(bgSource).toMatch(/REMOTE_CAPTCHA_DEFAULT_PERIOD_MINUTES\s*=\s*1/);
+      expect(bgSource).toMatch(/function syncRemoteCaptchaAlarm/);
+      expect(bgSource).toMatch(/getRemoteCaptchaPollIntervalMinutes/);
+      expect(bgSource).toMatch(/chrome\.alarms\.clear\(REMOTE_CAPTCHA_ALARM\)/);
     });
 
-    it('respects AUTO_OPEN_REMOTE_CAPTCHA setting', () => {
+    it('defaults AUTO_OPEN_REMOTE_CAPTCHA to off (opt-in)', () => {
+      expect(bgSource).toMatch(/AUTO_OPEN_REMOTE_CAPTCHA\] = result\[STORAGE_KEYS\.AUTO_OPEN_REMOTE_CAPTCHA\] \?\? false/);
+      // StorageService default must also be false.
+      const storage = require('fs').readFileSync(require('path').join(__dirname, '../../services/StorageService.js'), 'utf8');
+      expect(storage).toMatch(/AUTO_OPEN_REMOTE_CAPTCHA:[\s\S]*?defaultValue:\s*false/);
+    });
+
+    it('only polls when AUTO_OPEN_REMOTE_CAPTCHA is explicitly true', () => {
       expect(bgSource).toMatch(/AUTO_OPEN_REMOTE_CAPTCHA/);
-      expect(bgSource).toMatch(/AUTO_OPEN_REMOTE_CAPTCHA\] === false\) return/);
+      expect(bgSource).toMatch(/AUTO_OPEN_REMOTE_CAPTCHA\] !== true\) return/);
+    });
+
+    it('exposes configurable poll interval and reopen cooldown (minutes)', () => {
+      expect(bgSource).toMatch(/REMOTE_CAPTCHA_POLL_INTERVAL_MINUTES/);
+      expect(bgSource).toMatch(/REMOTE_CAPTCHA_REOPEN_COOLDOWN_MINUTES/);
+      expect(bgSource).toMatch(/REMOTE_CAPTCHA_DEFAULT_COOLDOWN_MINUTES\s*=\s*2/);
+      expect(bgSource).toMatch(/getRemoteCaptchaCooldownMs/);
+    });
+
+    it('re-syncs the alarm when the remote-captcha settings change', () => {
+      expect(bgSource).toMatch(/changes\[STORAGE_KEYS\.AUTO_OPEN_REMOTE_CAPTCHA\]/);
+      expect(bgSource).toMatch(/changes\[STORAGE_KEYS\.REMOTE_CAPTCHA_POLL_INTERVAL_MINUTES\]/);
+      expect(bgSource).toMatch(/changes\[STORAGE_KEYS\.REMOTE_CAPTCHA_REOPEN_COOLDOWN_MINUTES\]/);
+      expect(bgSource).toMatch(/syncRemoteCaptchaAlarm\(\)/);
     });
   });
 });

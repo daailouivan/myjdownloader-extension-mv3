@@ -118,6 +118,7 @@ global.chrome = {
   },
   alarms: {
     create: jest.fn(),
+    clear: jest.fn(() => Promise.resolve(true)),
     onAlarm: createEvent()
   },
   commands: {

@@ -311,6 +311,26 @@ angular.module('myjdWebextensionApp').run(['$templateCache', function($templateC
     "                <small>{{'ui_settings_auto_open_remote_captcha_description'\n" +
     "                    | translate}}</small>\n" +
     "            </p>\n" +
+    "            <div ng-if=\"settings[settingsKeys.AUTO_OPEN_REMOTE_CAPTCHA.key]\" id=\"remoteCaptchaPollIntervalContainer\"\n" +
+    "                style=\"padding-left: 16px;\">\n" +
+    "                <span for=\"remoteCaptchaPollInterval\">{{'ui_settings_remote_captcha_poll_interval'\n" +
+    "                    | translate}}</span>\n" +
+    "                <input style=\"width:48px; padding: 4px 0px 4px 4px; margin-right: 8px;\" type=\"number\" min=\"1\" max=\"1440\"\n" +
+    "                    id=\"remoteCaptchaPollInterval\"\n" +
+    "                    ng-model=\"settings[settingsKeys.REMOTE_CAPTCHA_POLL_INTERVAL_MINUTES.key]\" />\n" +
+    "                <span>{{'ui_settings_remote_captcha_minutes'\n" +
+    "                    | translate}}</span>\n" +
+    "            </div>\n" +
+    "            <div ng-if=\"settings[settingsKeys.AUTO_OPEN_REMOTE_CAPTCHA.key]\" id=\"remoteCaptchaCooldownContainer\"\n" +
+    "                style=\"padding-left: 16px; margin-top: 8px;\">\n" +
+    "                <span for=\"remoteCaptchaCooldown\">{{'ui_settings_remote_captcha_reopen_cooldown'\n" +
+    "                    | translate}}</span>\n" +
+    "                <input style=\"width:48px; padding: 4px 0px 4px 4px; margin-right: 8px;\" type=\"number\" min=\"1\" max=\"1440\"\n" +
+    "                    id=\"remoteCaptchaCooldown\"\n" +
+    "                    ng-model=\"settings[settingsKeys.REMOTE_CAPTCHA_REOPEN_COOLDOWN_MINUTES.key]\" />\n" +
+    "                <span>{{'ui_settings_remote_captcha_minutes'\n" +
+    "                    | translate}}</span>\n" +
+    "            </div>\n" +
     "        </div>\n" +
     "    </div>\n" +
     "    <h4>About</h4>\n" +

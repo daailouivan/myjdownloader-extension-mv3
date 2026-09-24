@@ -512,9 +512,18 @@
       "message": "Click here"
    },
    "ui_settings_auto_open_remote_captcha_title": {
-      "message": "Auto-open remote CAPTCHAs"
+      "message": "Remote JDownloader CAPTCHAs"
    },
    "ui_settings_auto_open_remote_captcha_description": {
-      "message": "When a headless or remote JDownloader has a browser CAPTCHA waiting, open a tab in this browser so you can solve it."
+      "message": "Open a tab to solve CAPTCHAs from a JDownloader running on another machine (NAS, server, Docker)."
+   },
+   "ui_settings_remote_captcha_poll_interval": {
+      "message": "Check every"
+   },
+   "ui_settings_remote_captcha_reopen_cooldown": {
+      "message": "Wait before reopening a closed CAPTCHA"
+   },
+   "ui_settings_remote_captcha_minutes": {
+      "message": "minutes"
    }
 }
