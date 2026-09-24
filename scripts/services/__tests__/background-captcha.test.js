@@ -220,7 +220,7 @@ describe('Background CAPTCHA Handlers (CAP-03, CAP-04, CAP-07)', () => {
 
     it('allows the known hCaptcha and reCAPTCHA API endpoints', () => {
       expect(isCaptchaApiScript('https://hcaptcha.com/1/api.js')).toBe(true);
-      expect(isCaptchaApiScript('https://js.hcaptcha.com/1/api.js')).toBe(true);
+      expect(isCaptchaApiScript('https://js.hcaptcha.com/1/api.js')).toBe(false);
       expect(isCaptchaApiScript('https://www.google.com/recaptcha/api.js')).toBe(true);
     });
 
@@ -269,42 +269,25 @@ describe('Background CAPTCHA Handlers (CAP-03, CAP-04, CAP-07)', () => {
       expect(section[0]).toMatch(/isCaptchaApiScript\(/);
     });
 
-    it('should load the script in the MAIN world via injectCaptchaApiScript (retries frame-removed)', () => {
-      expect(bgSource).toMatch(/function\s+injectCaptchaApiScript\s*\(/);
-      expect(bgSource).toMatch(/isTransientFrameError/);
-      expect(bgSource).toMatch(/Frame with ID/);
-      const section = bgSource.match(/action\s*===\s*["']myjd-captcha-load-api["'][\s\S]*?\n \}/);
+    it('should load the script in the MAIN world via direct executeScript (9aeddea path)', () => {
+      // Match through the final return true of the handler (not the early reject).
+      const section = bgSource.match(/action\s*===\s*["']myjd-captcha-load-api["'][\s\S]*?Failed to load CAPTCHA API script[\s\S]*?return\s+true;/);
       expect(section).not.toBeNull();
-      expect(section[0]).toMatch(/injectCaptchaApiScript\(/);
-      // The actual executeScript lives inside injectCaptchaApiScript
-      const inject = bgSource.match(/function\s+injectCaptchaApiScript[\s\S]*?\n\}/);
-      expect(inject).not.toBeNull();
-      expect(inject[0]).toMatch(/chrome\.scripting\.executeScript/);
-      expect(inject[0]).toMatch(/world:\s*['"]MAIN['"]/);
-      expect(inject[0]).toMatch(/data-cfasync/);
-      // Always inject into <head> (not #captchaContainer) so clearDocument's
-      // head-preserve path keeps the tag, and use the native createElement to
-      // bypass Cloudflare rocket-loader hooks.
-      expect(inject[0]).toMatch(/document\.head|document\.createElement\(['"]head['"]\)/);
-      expect(inject[0]).toMatch(/Document\.prototype\.createElement/);
-      expect(inject[0]).toMatch(/data-myjd-captcha-api/);
-      expect(inject[0]).not.toMatch(/getElementById\(['"]captchaContainer['"]\)/);
+      expect(section[0]).toMatch(/chrome\.scripting\.executeScript/);
+      expect(section[0]).toMatch(/world:\s*['"]MAIN['"]/);
+      expect(section[0]).toMatch(/getElementById\(['"]captchaContainer['"]\)/);
+      expect(section[0]).toMatch(/document\.head/);
+      expect(section[0]).toMatch(/document\.documentElement/);
+      expect(bgSource).not.toMatch(/function\s+injectCaptchaApiScript\s*\(/);
+      expect(bgSource).not.toMatch(/function\s+isTransientFrameError\s*\(/);
     });
 
     it('should report load/error back via window.postMessage with target origin \'*\'', () => {
-      // Not window.location.origin: on an opaque-origin document that's the
-      // string "null", which postMessage rejects with a SyntaxError instead
-      // of sending (S7). Same window, no secret in the payload, and the
-      // receiver already checks event.source === window.
-      const inject = bgSource.match(/function\s+injectCaptchaApiScript[\s\S]*?\n\}/);
-      expect(inject).not.toBeNull();
-      // One shared finish() posts both 'loaded' and 'error' with target '*'.
-      expect(inject[0]).toMatch(/window\.postMessage\(/);
-      expect(inject[0]).toMatch(/__myjd_captcha_api__/);
-      expect(inject[0]).toMatch(/status:\s*status/);
-      expect(inject[0]).toMatch(/,\s*'\*'\s*\)/);
-      expect(inject[0]).toMatch(/finish\(['"]loaded['"]\)/);
-      expect(inject[0]).toMatch(/finish\(['"]error['"]/);
+      // Assert against the load-api inject func body (avoid early return true truncating the match).
+      expect(bgSource).toMatch(/action\s*===\s*["']myjd-captcha-load-api["']/);
+      expect(bgSource).toMatch(/window\.postMessage\(\{\s*__myjd_captcha_api__:\s*true,\s*status:\s*'loaded'/);
+      expect(bgSource).toMatch(/window\.postMessage\(\{\s*__myjd_captcha_api__:\s*true,\s*status:\s*'error'/);
+      expect(bgSource).toMatch(/postMessage\([^\)]*,\s*'\*'\s*\)/);
     });
 
     it('should respond with status:error when the URL is rejected or injection fails', () => {

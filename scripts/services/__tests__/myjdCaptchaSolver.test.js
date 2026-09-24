@@ -33,45 +33,23 @@ describe('MYJD CAPTCHA Solver Content Script', function() {
   });
 
   describe('DOM wipe', function() {
-    it('must not call document.open/close (tears down the frame; api.js never loads)', function() {
-      expect(csSource).not.toMatch(/^\s*document\.open\s*\(/m);
-      expect(csSource).not.toMatch(/^\s*document\.close\s*\(/m);
-    });
-    it('should document the Frame-with-ID-0 failure mode', function() {
-      expect(csSource).toMatch(/Frame with ID 0 was removed/);
-    });
-    it('should reuse document.body instead of appending a second body', function() {
-      expect(csSource).toMatch(/var body = document\.body/);
-      expect(csSource).toMatch(/body\.id = 'myjd-captcha-body'/);
-      // Must not createElement('body') as the primary path — that caused the blank tab.
-      expect(csSource).toMatch(/if \(!body\)/);
-    });
-    it('should ensure a <head> exists for the MAIN-world api.js injector', function() {
-      expect(csSource).toMatch(/document\.head/);
-      expect(csSource).toMatch(/createElement\('head'\)/);
-    });
     it('should have clearDocument defense that removes foreign bodies', function() {
       expect(csSource).toMatch(/clearDocument/);
-      expect(csSource).toMatch(/removeForeignBodies/);
+      expect(csSource).toMatch(/DOMContentLoaded/);
+      expect(csSource).toMatch(/myjd-captcha-body/);
     });
-    it('should preserve CAPTCHA api.js scripts when clearing <head>', function() {
-      expect(csSource).toMatch(/hcaptcha\.com\/1\/api\.js/);
+    it('should use document.open/close for DOM replacement (9aeddea known-good path)', function() {
+      expect(csSource).toMatch(/document\.open\(\)/);
+      expect(csSource).toMatch(/document\.close\(\)/);
     });
-    it('should force html/body visibility so Cloudflare anti-flicker cannot hide the UI on screen', function() {
-      expect(csSource).toMatch(/forceCaptchaUiVisible/);
-      expect(csSource).toMatch(/myjd-captcha-visible/);
-      expect(csSource).toMatch(/visibility:\s*visible\s*!important/);
-    });
-    it('should preserve the visibility stylesheet when clearing <head>', function() {
-      expect(csSource).toMatch(/keepStyle/);
-      expect(csSource).toMatch(/myjd-captcha-visible/);
+    it('should reuse document.body after open/close instead of appending a second body', function() {
+      expect(csSource).toMatch(/var body = document\.body/);
+      // Only append a new body when document.body is missing after open/close.
+      expect(csSource).toMatch(/if \(!body\)/);
     });
     it('should have DOMContentLoaded defense for foreign body removal', function() {
       expect(csSource).toMatch(/DOMContentLoaded/);
       expect(csSource).toMatch(/myjd-captcha-body/);
-    });
-    it('should call window.stop to abort the hoster document race', function() {
-      expect(csSource).toMatch(/window\.stop/);
     });
   });
 
@@ -93,8 +71,9 @@ describe('MYJD CAPTCHA Solver Content Script', function() {
     it('should know the reCAPTCHA API script URL', function() {
       expect(csSource).toMatch(/google\.com\/recaptcha\/api\.js/);
     });
-    it('should know the hCaptcha API script URL (canonical js.hcaptcha.com CDN)', function() {
-      expect(csSource).toMatch(/js\.hcaptcha\.com\/1\/api\.js/);
+    it('should know the hCaptcha API script URL (hcaptcha.com/1/api.js as in 9aeddea)', function() {
+      expect(csSource).toMatch(/hcaptcha\.com\/1\/api\.js/);
+      expect(csSource).not.toMatch(/js\.hcaptcha\.com\/1\/api\.js/);
     });
     it('should handle invisible/v3 with data-size invisible', function() {
       expect(csSource).toMatch(/data-size.*invisible|invisible.*data-size/);

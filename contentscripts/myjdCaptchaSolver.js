@@ -4,32 +4,20 @@
 // Hash gate: only activate on pages navigated to with #rc2jdt hash
 if (!location.hash.startsWith('#rc2jdt')) return;
 
-// --- DOM wipe (defense-in-depth) ---
-// Abort the hoster document so its HTML/CSS cannot race with our UI.
-try { window.stop(); } catch (e) { /* ignore */ }
+// --- DOM replacement (defense-in-depth) ---
 
-// IMPORTANT: do NOT call document.open()/close(). That tears down the browsing
-// frame mid-navigation and makes chrome.scripting.executeScript fail with
-// "Frame with ID 0 was removed", so hCaptcha's api.js is never requested.
-// Wipe the existing Document in place so the frame id stays stable, then
-// reuse document.body (never append a second <body> — that orphans the UI).
-var html = document.documentElement;
-if (!html) {
-    html = document.createElement('html');
-    document.appendChild(html);
-}
-var head = document.head;
-if (!head) {
-    head = document.createElement('head');
-    html.insertBefore(head, html.firstChild);
-} else {
-    while (head.firstChild) head.removeChild(head.firstChild);
-}
+// Strategy 1: Replace the document the same way the known-good 9aeddea build
+// did (document.open/close). That path successfully loaded hCaptcha api.js;
+// later "in-place wipe" experiments regressed it. Only change vs 9aeddea:
+// reuse document.body after open/close instead of appending a second <body>,
+// which left a blank-looking page in some browsers (double-body).
+document.open();
+document.close();
 
 var body = document.body;
 if (!body) {
     body = document.createElement('body');
-    html.appendChild(body);
+    document.documentElement.appendChild(body);
 } else {
     while (body.firstChild) body.removeChild(body.firstChild);
 }
@@ -46,65 +34,7 @@ loadingMsg.style.fontSize = '18px';
 loadingMsg.style.marginTop = '40px';
 body.appendChild(loadingMsg);
 
-// Force the CAPTCHA UI visible on screen. Cloudflare anti-flicker CSS
-// (html{visibility:hidden} with @media print{visibility:visible}) and leftover
-// hoster opacity rules can leave a print-preview-only page even after we wipe
-// <head> — the <html> element's inline/computed styles survive the wipe.
-var forceCaptchaUiVisible = function() {
-    var root = document.documentElement;
-    if (root) {
-        root.style.setProperty('visibility', 'visible', 'important');
-        root.style.setProperty('opacity', '1', 'important');
-        root.style.setProperty('display', 'block', 'important');
-        root.style.setProperty('background', '#f5f5f5', 'important');
-        root.removeAttribute('hidden');
-        if (root.classList) {
-            root.classList.remove('cf-invisible', 'no-js', 'js-loading');
-        }
-    }
-    if (body) {
-        body.style.setProperty('visibility', 'visible', 'important');
-        body.style.setProperty('opacity', '1', 'important');
-    }
-    var headEl = document.head;
-    if (headEl && !document.getElementById('myjd-captcha-visible')) {
-        var style = document.createElement('style');
-        style.id = 'myjd-captcha-visible';
-        style.textContent = [
-            'html, body, body#myjd-captcha-body {',
-            '  visibility: visible !important;',
-            '  opacity: 1 !important;',
-            '  content-visibility: visible !important;',
-            '}',
-            'html { background: #f5f5f5 !important; }',
-            'body#myjd-captcha-body {',
-            '  color: #333 !important;',
-            '  background: #f5f5f5 !important;',
-            '  display: flex !important;',
-            '}',
-            '#myjd-captcha-body, #captchaContainer, #myjd-captcha-controls, #myjd-countdown {',
-            '  visibility: visible !important;',
-            '  opacity: 1 !important;',
-            '}'
-        ].join('\\n');
-        headEl.appendChild(style);
-    }
-};
-forceCaptchaUiVisible();
-
-
-// Drop any extra <body> siblings that a late hoster parse may have inserted.
-var removeForeignBodies = function() {
-    var bodies = document.querySelectorAll('body');
-    var k;
-    for (k = 0; k < bodies.length; k++) {
-        if (bodies[k].id !== 'myjd-captcha-body' && bodies[k].parentNode) {
-            bodies[k].parentNode.removeChild(bodies[k]);
-        }
-    }
-};
-
-// Strategy 2: On readystatechange, clear foreign DOM (including extra bodies).
+// Strategy 2: On readystatechange, clear foreign DOM
 var clearDocument = function() {
     var html = document.documentElement;
     if (!html) return;
@@ -112,38 +42,25 @@ var clearDocument = function() {
     for (i = html.childNodes.length - 1; i >= 0; i--) {
         var child = html.childNodes[i];
         if (child.nodeName === 'BODY' && child.id === 'myjd-captcha-body') continue;
-        if (child.nodeName === 'BODY') {
-            html.removeChild(child);
-            continue;
-        }
         if (child.nodeName === 'HEAD') {
-            // Keep CAPTCHA provider api.js if the MAIN-world injector parked it
-            // in <head>; wiping it would undo myjd-captcha-load-api.
-            var hchild = child.firstChild;
-            while (hchild) {
-                var next = hchild.nextSibling;
-                var keepScript = hchild.nodeName === 'SCRIPT' && hchild.src &&
-                    /hcaptcha\.com\/1\/api\.js|google\.com\/recaptcha\/api\.js/.test(hchild.src);
-                var keepStyle = hchild.nodeName === 'STYLE' && hchild.id === 'myjd-captcha-visible';
-                if (!keepScript && !keepStyle) child.removeChild(hchild);
-                hchild = next;
-            }
-            forceCaptchaUiVisible();
+            while (child.firstChild) child.removeChild(child.firstChild);
             continue;
         }
-        html.removeChild(child);
+        if (child.nodeName !== 'BODY') html.removeChild(child);
     }
 };
 document.addEventListener('readystatechange', clearDocument);
 
-// Strategy 3: Remove foreign bodies on DOMContentLoaded — and immediately if
-// we are already past 'loading' (so the event never fires).
-var onDomReady = function() { removeForeignBodies(); };
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', onDomReady);
-} else {
-    onDomReady();
-}
+// Strategy 3: On DOMContentLoaded, remove foreign body elements
+document.addEventListener('DOMContentLoaded', function() {
+    var bodies = document.querySelectorAll('body');
+    var k;
+    for (k = 0; k < bodies.length; k++) {
+        if (bodies[k].id !== 'myjd-captcha-body') {
+            bodies[k].parentNode.removeChild(bodies[k]);
+        }
+    }
+});
 
 // --- Interval handles for cleanup ---
 var pollingHandle = null;
@@ -169,22 +86,12 @@ chrome.storage.session.get('myjd_captcha_job', function(result) {
  * Render the CAPTCHA widget, skip buttons, countdown timer, and start token polling.
  */
 function renderCaptchaWidget(job) {
-    // Clear document head and body children — but keep a MAIN-world api.js
-    // (and our visibility stylesheet) that may already have been injected.
+    // Clear document head and body children
     var head = document.head || document.getElementsByTagName('head')[0];
     if (head) {
-        var hchild = head.firstChild;
-        while (hchild) {
-            var next = hchild.nextSibling;
-            var keepScript = hchild.nodeName === 'SCRIPT' && hchild.src &&
-                /hcaptcha\.com\/1\/api\.js|google\.com\/recaptcha\/api\.js/.test(hchild.src);
-            var keepStyle = hchild.nodeName === 'STYLE' && hchild.id === 'myjd-captcha-visible';
-            if (!keepScript && !keepStyle) head.removeChild(hchild);
-            hchild = next;
-        }
+        while (head.firstChild) head.removeChild(head.firstChild);
     }
     while (body.firstChild) body.removeChild(body.firstChild);
-    forceCaptchaUiVisible();
 
     // Set page title
     document.title = 'CAPTCHA - ' + (job.hoster || 'JDownloader');
@@ -198,7 +105,6 @@ function renderCaptchaWidget(job) {
     body.style.padding = '32px';
     body.style.maxWidth = '600px';
     body.style.margin = '0 auto';
-    forceCaptchaUiVisible();
 
     // Header
     var header = document.createElement('h2');
@@ -221,7 +127,7 @@ function renderCaptchaWidget(job) {
     if (isHcaptcha) {
         widgetDiv.className = 'h-captcha';
         widgetDiv.setAttribute('data-sitekey', job.siteKey);
-        apiScriptUrl = 'https://js.hcaptcha.com/1/api.js';
+        apiScriptUrl = 'https://hcaptcha.com/1/api.js';
     } else {
         widgetDiv.className = 'g-recaptcha';
         widgetDiv.setAttribute('data-sitekey', job.siteKey);

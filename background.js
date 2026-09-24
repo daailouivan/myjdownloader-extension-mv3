@@ -156,106 +156,13 @@ function isCaptchaApiScript(url) {
   var parsed = new URL(url);
   if (parsed.protocol !== 'https:') return false;
   if (parsed.pathname !== '/1/api.js' && parsed.pathname !== '/recaptcha/api.js') return false;
-  // js.hcaptcha.com is the canonical CDN; hcaptcha.com/1/api.js still redirects there.
-  var allowedHosts = ['hcaptcha.com', 'js.hcaptcha.com', 'www.google.com'];
+  var allowedHosts = ['hcaptcha.com', 'www.google.com'];
   return allowedHosts.indexOf(parsed.hostname) !== -1;
  } catch (err) {
   return false;
  }
 }
 
-function isTransientFrameError(err) {
- var msg = (err && (err.message || String(err))) || '';
- return /Frame with ID \d+ was removed|No frame with id|Cannot access contents of (the page|url)|The tab was closed/i.test(msg);
-}
-
-/**
- * Inject a CAPTCHA provider api.js into the tab's MAIN world, retrying when
- * the frame was torn down mid-navigation (document.open races, redirects).
- */
-function injectCaptchaApiScript(tabId, url) {
- var maxAttempts = 5;
- var attempt = 0;
- function once() {
-  attempt++;
-  return chrome.scripting.executeScript({
-   target: { tabId: tabId },
-   world: 'MAIN',
-   args: [url],
-   func: function(scriptUrl) {
-    // Promise resolves only after the script's load/error — appendChild alone
-    // used to report ok while rocket-loader / a head wipe still prevented the
-    // network request, leaving the widget blank until the 15s UI timeout.
-    return new Promise(function(resolve, reject) {
-     var head = document.head;
-     if (!head) {
-      head = document.createElement('head');
-      document.documentElement.insertBefore(head, document.documentElement.firstChild);
-     }
-
-     // Disable Cloudflare rocket-loader hooks that rewrite createElement('script').
-     try {
-      var scripts = document.querySelectorAll('script[src*="rocket-loader"], script[data-cf-settings]');
-      for (var i = 0; i < scripts.length; i++) {
-       if (scripts[i].parentNode) scripts[i].parentNode.removeChild(scripts[i]);
-      }
-      if (window.CloudFlare) {
-       try { delete window.CloudFlare; } catch (e1) { window.CloudFlare = undefined; }
-      }
-     } catch (e2) { /* ignore */ }
-
-     // Always park api.js in <head> (never #captchaContainer): clearDocument
-     // only preserves provider scripts that live under <head>, and hoster JS
-     // is more aggressive about scrubbing scripts inside the body.
-     var nativeCreate = Document.prototype.createElement.bind(document);
-     // Drop a previous failed attempt so we don't stack duplicate tags.
-     var prior = head.querySelectorAll('script[data-myjd-captcha-api="1"]');
-     for (var p = 0; p < prior.length; p++) {
-      if (prior[p].parentNode) prior[p].parentNode.removeChild(prior[p]);
-     }
-
-     var script = nativeCreate('script');
-     script.src = scriptUrl;
-     script.async = true;
-     script.setAttribute('data-cfasync', 'false');
-     script.setAttribute('data-myjd-captcha-api', '1');
-
-     var settled = false;
-     function finish(status, errMsg) {
-      if (settled) return;
-      settled = true;
-      try {
-       window.postMessage({ __myjd_captcha_api__: true, status: status }, '*');
-      } catch (e3) { /* ignore */ }
-      if (status === 'loaded') resolve();
-      else reject(new Error(errMsg || ('CAPTCHA API script ' + status)));
-     }
-
-     script.addEventListener('load', function() { finish('loaded'); });
-     script.addEventListener('error', function() { finish('error', 'CAPTCHA API script failed to load'); });
-     // Hard ceiling so a hung request cannot pin the SW message channel forever.
-     setTimeout(function() {
-      if (!settled) finish('error', 'CAPTCHA API script load timed out');
-     }, 10000);
-
-     head.appendChild(script);
-    });
-   }
-  }).then(function(results) {
-   // executeScript resolves to [{result}] for the returned Promise.
-   return results;
-  }).catch(function(err) {
-   if (isTransientFrameError(err) && attempt < maxAttempts) {
-    console.warn('Background: CAPTCHA API inject attempt', attempt, 'failed (transient), retrying:', err && err.message);
-    return new Promise(function(resolve) {
-     setTimeout(resolve, 50 * attempt);
-    }).then(once);
-   }
-   throw err;
-  });
- }
- return once();
-}
 
 async function addLinkToRequestQueue(link, tab) {
  await queueReady;
@@ -1231,7 +1138,25 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
    sendResponse({ status: 'error', error: 'url not allowed' });
    return true;
   }
-  injectCaptchaApiScript(sender.tab.id, request.data.url).then(function() {
+  // Same MAIN-world inject as 9aeddea (known-good widget render). Do not wrap
+  // in retry/head-park helpers — those regressed api.js loading on hoster pages.
+  chrome.scripting.executeScript({
+   target: { tabId: sender.tab.id },
+   world: 'MAIN',
+   args: [request.data.url],
+   func: function(url) {
+    var container = document.getElementById('captchaContainer') || document.head || document.documentElement;
+    var script = document.createElement('script');
+    script.src = url;
+    script.addEventListener('load', function() {
+     window.postMessage({ __myjd_captcha_api__: true, status: 'loaded' }, '*');
+    });
+    script.addEventListener('error', function() {
+     window.postMessage({ __myjd_captcha_api__: true, status: 'error' }, '*');
+    });
+    container.appendChild(script);
+   }
+  }).then(function() {
    sendResponse({ status: 'ok' });
   }).catch(function(err) {
    console.error('Background: Failed to load CAPTCHA API script in MAIN world:', err);
