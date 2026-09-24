@@ -71,8 +71,9 @@ describe('MYJD CAPTCHA Solver Content Script', function() {
     it('should know the reCAPTCHA API script URL', function() {
       expect(csSource).toMatch(/google\.com\/recaptcha\/api\.js/);
     });
-    it('should know the hCaptcha API script URL', function() {
+    it('should know the hCaptcha API script URL (hcaptcha.com/1/api.js as in 9aeddea)', function() {
       expect(csSource).toMatch(/hcaptcha\.com\/1\/api\.js/);
+      expect(csSource).not.toMatch(/js\.hcaptcha\.com\/1\/api\.js/);
     });
     it('should handle invisible/v3 with data-size invisible', function() {
       expect(csSource).toMatch(/data-size.*invisible|invisible.*data-size/);

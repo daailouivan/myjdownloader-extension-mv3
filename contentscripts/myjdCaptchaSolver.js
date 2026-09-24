@@ -281,7 +281,7 @@ function injectSkipButtons(job) {
             chrome.runtime.sendMessage({
                 action: 'captcha-skip',
                 data: {
-                    callbackUrl: 'MYJD',
+                    callbackUrl: job.callbackUrl || 'MYJD',
                     captchaId: job.captchaId,
                     skipType: skipType
                 }
@@ -309,8 +309,9 @@ function startTokenPolling(job) {
                     action: 'captcha-solved',
                     data: {
                         token: recaptchaTextareas[i].value,
-                        callbackUrl: 'MYJD',
-                        captchaId: job.captchaId
+                        callbackUrl: job.callbackUrl || 'MYJD',
+                        captchaId: job.captchaId,
+                        deviceId: job.deviceId || null
                     }
                 });
                 return;
@@ -327,8 +328,9 @@ function startTokenPolling(job) {
                     action: 'captcha-solved',
                     data: {
                         token: hcaptchaTextareas[i].value,
-                        callbackUrl: 'MYJD',
-                        captchaId: job.captchaId
+                        callbackUrl: job.callbackUrl || 'MYJD',
+                        captchaId: job.captchaId,
+                        deviceId: job.deviceId || null
                     }
                 });
                 return;
@@ -341,7 +343,7 @@ function startTokenPolling(job) {
 
 /**
  * 5-minute countdown timer with visual urgency.
- * Sends skip(single) with MYJD callbackUrl on expiry.
+ * Sends skip(single) with the job's callback on expiry.
  */
 function startCountdown(job) {
     var TIMEOUT_MS = 5 * 60 * 1000; // 300000ms = 5 minutes
@@ -378,7 +380,7 @@ function startCountdown(job) {
             chrome.runtime.sendMessage({
                 action: 'captcha-skip',
                 data: {
-                    callbackUrl: 'MYJD',
+                    callbackUrl: job.callbackUrl || 'MYJD',
                     captchaId: job.captchaId,
                     skipType: 'single'
                 }

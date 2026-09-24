@@ -91,6 +91,9 @@ angular.module('myjdWebextensionApp')
         $scope.settings[$scope.settingsKeys.COUNTDOWN_VALUE.key] = $scope.settingsKeys[$scope.settingsKeys.COUNTDOWN_VALUE.key].defaultValue;
         $scope.settings[$scope.settingsKeys.CLICKNLOAD_ACTIVE.key] = $scope.settingsKeys[$scope.settingsKeys.CLICKNLOAD_ACTIVE.key].defaultValue;
         $scope.settings[$scope.settingsKeys.CAPTCHA_PRIVACY_MODE.key] = $scope.settingsKeys[$scope.settingsKeys.CAPTCHA_PRIVACY_MODE.key].defaultValue;
+        $scope.settings[$scope.settingsKeys.AUTO_OPEN_REMOTE_CAPTCHA.key] = $scope.settingsKeys[$scope.settingsKeys.AUTO_OPEN_REMOTE_CAPTCHA.key].defaultValue;
+        $scope.settings[$scope.settingsKeys.REMOTE_CAPTCHA_POLL_INTERVAL_MINUTES.key] = $scope.settingsKeys[$scope.settingsKeys.REMOTE_CAPTCHA_POLL_INTERVAL_MINUTES.key].defaultValue;
+        $scope.settings[$scope.settingsKeys.REMOTE_CAPTCHA_REOPEN_COOLDOWN_MINUTES.key] = $scope.settingsKeys[$scope.settingsKeys.REMOTE_CAPTCHA_REOPEN_COOLDOWN_MINUTES.key].defaultValue;
 
         initSettings();
 
@@ -189,6 +192,9 @@ angular.module('myjdWebextensionApp')
             "settings." + $scope.settingsKeys.DEFAULT_AUTOSTART.key,
             "settings." + $scope.settingsKeys.DEFAULT_AUTOEXTRACT.key,
             "settings." + $scope.settingsKeys.CAPTCHA_PRIVACY_MODE.key,
+            "settings." + $scope.settingsKeys.AUTO_OPEN_REMOTE_CAPTCHA.key,
+            "settings." + $scope.settingsKeys.REMOTE_CAPTCHA_POLL_INTERVAL_MINUTES.key,
+            "settings." + $scope.settingsKeys.REMOTE_CAPTCHA_REOPEN_COOLDOWN_MINUTES.key,
             "settings." + $scope.settingsKeys.CLICKNLOAD_ACTIVE.key,
             "settings." + $scope.settingsKeys.DEFAULT_OVERWRITE_PACKAGIZER.key],
             function (newValues, oldValues, scope) {
@@ -221,6 +227,33 @@ angular.module('myjdWebextensionApp')
                 changes.push({
                     key: $scope.settingsKeys.CAPTCHA_PRIVACY_MODE.key,
                     value: scope.settings[$scope.settingsKeys.CAPTCHA_PRIVACY_MODE.key]
+                });
+
+                changes.push({
+                    key: $scope.settingsKeys.AUTO_OPEN_REMOTE_CAPTCHA.key,
+                    value: scope.settings[$scope.settingsKeys.AUTO_OPEN_REMOTE_CAPTCHA.key]
+                });
+
+                if (scope.settings[$scope.settingsKeys.REMOTE_CAPTCHA_POLL_INTERVAL_MINUTES.key] === undefined
+                    || scope.settings[$scope.settingsKeys.REMOTE_CAPTCHA_POLL_INTERVAL_MINUTES.key] < 1) {
+                    scope.settings[$scope.settingsKeys.REMOTE_CAPTCHA_POLL_INTERVAL_MINUTES.key] = 1;
+                } else if (scope.settings[$scope.settingsKeys.REMOTE_CAPTCHA_POLL_INTERVAL_MINUTES.key] > 1440) {
+                    scope.settings[$scope.settingsKeys.REMOTE_CAPTCHA_POLL_INTERVAL_MINUTES.key] = 1440;
+                }
+                changes.push({
+                    key: $scope.settingsKeys.REMOTE_CAPTCHA_POLL_INTERVAL_MINUTES.key,
+                    value: scope.settings[$scope.settingsKeys.REMOTE_CAPTCHA_POLL_INTERVAL_MINUTES.key]
+                });
+
+                if (scope.settings[$scope.settingsKeys.REMOTE_CAPTCHA_REOPEN_COOLDOWN_MINUTES.key] === undefined
+                    || scope.settings[$scope.settingsKeys.REMOTE_CAPTCHA_REOPEN_COOLDOWN_MINUTES.key] < 1) {
+                    scope.settings[$scope.settingsKeys.REMOTE_CAPTCHA_REOPEN_COOLDOWN_MINUTES.key] = 1;
+                } else if (scope.settings[$scope.settingsKeys.REMOTE_CAPTCHA_REOPEN_COOLDOWN_MINUTES.key] > 1440) {
+                    scope.settings[$scope.settingsKeys.REMOTE_CAPTCHA_REOPEN_COOLDOWN_MINUTES.key] = 1440;
+                }
+                changes.push({
+                    key: $scope.settingsKeys.REMOTE_CAPTCHA_REOPEN_COOLDOWN_MINUTES.key,
+                    value: scope.settings[$scope.settingsKeys.REMOTE_CAPTCHA_REOPEN_COOLDOWN_MINUTES.key]
                 });
 
                 changes.push({
