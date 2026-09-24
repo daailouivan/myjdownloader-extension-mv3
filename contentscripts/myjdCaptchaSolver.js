@@ -4,157 +4,81 @@
 // Hash gate: only activate on pages navigated to with #rc2jdt hash
 if (!location.hash.startsWith('#rc2jdt')) return;
 
+// --- DOM replacement (defense-in-depth) ---
+
+// Strategy 1: Replace the document the same way the known-good 9aeddea build
+// did (document.open/close). That path successfully loaded hCaptcha api.js;
+// later "in-place wipe" experiments regressed it. Only change vs 9aeddea:
+// reuse document.body after open/close instead of appending a second <body>,
+// which left a blank-looking page in some browsers (double-body).
+document.open();
+document.close();
+
+var body = document.body;
+if (!body) {
+    body = document.createElement('body');
+    document.documentElement.appendChild(body);
+} else {
+    while (body.firstChild) body.removeChild(body.firstChild);
+}
+body.id = 'myjd-captcha-body';
+body.style.background = '#3c686f';
+body.style.color = '#fff';
+body.style.fontFamily = 'Arial, sans-serif';
+body.style.padding = '32px';
+body.style.margin = '0';
+var loadingMsg = document.createElement('div');
+loadingMsg.textContent = 'Loading CAPTCHA solver...';
+loadingMsg.style.textAlign = 'center';
+loadingMsg.style.fontSize = '18px';
+loadingMsg.style.marginTop = '40px';
+body.appendChild(loadingMsg);
+
+// Strategy 2: On readystatechange, clear foreign DOM
+var clearDocument = function() {
+    var html = document.documentElement;
+    if (!html) return;
+    var i;
+    for (i = html.childNodes.length - 1; i >= 0; i--) {
+        var child = html.childNodes[i];
+        if (child.nodeName === 'BODY' && child.id === 'myjd-captcha-body') continue;
+        if (child.nodeName === 'HEAD') {
+            while (child.firstChild) child.removeChild(child.firstChild);
+            continue;
+        }
+        if (child.nodeName !== 'BODY') html.removeChild(child);
+    }
+};
+document.addEventListener('readystatechange', clearDocument);
+
+// Strategy 3: On DOMContentLoaded, remove foreign body elements
+document.addEventListener('DOMContentLoaded', function() {
+    var bodies = document.querySelectorAll('body');
+    var k;
+    for (k = 0; k < bodies.length; k++) {
+        if (bodies[k].id !== 'myjd-captcha-body') {
+            bodies[k].parentNode.removeChild(bodies[k]);
+        }
+    }
+});
+
 // --- Interval handles for cleanup ---
 var pollingHandle = null;
 var countdownHandle = null;
 
-// Body handle filled after document.open/close in beginSolverUi().
-var body = null;
-
-/**
- * Resolve the parked CAPTCHA job before wiping the hoster document.
- * Order matters: open/close replaces the document and can disrupt late
- * chrome.storage.session reads; asking the SW (trusted) is the durable path
- * when session access level has not yet exposed keys to content scripts.
- */
-function loadCaptchaJob(done) {
-    var attempts = 0;
-    var maxAttempts = 8;
-
-    function fromStorage(next) {
-        try {
-            if (!chrome.storage || !chrome.storage.session) {
-                next(null);
-                return;
-            }
-            chrome.storage.session.get('myjd_captcha_job', function(result) {
-                if (chrome.runtime && chrome.runtime.lastError) {
-                    next(null);
-                    return;
-                }
-                next(result && result.myjd_captcha_job ? result.myjd_captcha_job : null);
-            });
-        } catch (e) {
-            next(null);
-        }
-    }
-
-    function fromBackground(next) {
-        try {
-            chrome.runtime.sendMessage({ action: 'myjd-captcha-get-job' }, function(response) {
-                if (chrome.runtime && chrome.runtime.lastError) {
-                    next(null);
-                    return;
-                }
-                next(response && response.status === 'ok' && response.job ? response.job : null);
-            });
-        } catch (e) {
-            next(null);
-        }
-    }
-
-    function attempt() {
-        attempts++;
-        fromBackground(function(job) {
-            if (job) {
-                done(job);
-                return;
-            }
-            fromStorage(function(stored) {
-                if (stored) {
-                    done(stored);
-                    return;
-                }
-                if (attempts >= maxAttempts) {
-                    done(null);
-                    return;
-                }
-                setTimeout(attempt, 50 * attempts);
-            });
-        });
-    }
-
-    attempt();
-}
-
-function beginSolverUi() {
-    // --- DOM replacement (defense-in-depth) ---
-
-    // Strategy 1: Replace the document the same way the known-good 9aeddea build
-    // did (document.open/close). That path successfully loaded hCaptcha api.js;
-    // later "in-place wipe" experiments regressed it. Only change vs 9aeddea:
-    // reuse document.body after open/close instead of appending a second <body>,
-    // which left a blank-looking page in some browsers (double-body).
-    document.open();
-    document.close();
-
-    body = document.body;
-    if (!body) {
-        body = document.createElement('body');
-        document.documentElement.appendChild(body);
-    } else {
-        while (body.firstChild) body.removeChild(body.firstChild);
-    }
-    body.id = 'myjd-captcha-body';
-    body.style.background = '#3c686f';
-    body.style.color = '#fff';
-    body.style.fontFamily = 'Arial, sans-serif';
-    body.style.padding = '32px';
-    body.style.margin = '0';
-    var loadingMsg = document.createElement('div');
-    loadingMsg.textContent = 'Loading CAPTCHA solver...';
-    loadingMsg.style.textAlign = 'center';
-    loadingMsg.style.fontSize = '18px';
-    loadingMsg.style.marginTop = '40px';
-    body.appendChild(loadingMsg);
-
-    // Strategy 2: On readystatechange, clear foreign DOM
-    var clearDocument = function() {
-        var html = document.documentElement;
-        if (!html) return;
-        var i;
-        for (i = html.childNodes.length - 1; i >= 0; i--) {
-            var child = html.childNodes[i];
-            if (child.nodeName === 'BODY' && child.id === 'myjd-captcha-body') continue;
-            if (child.nodeName === 'HEAD') {
-                while (child.firstChild) child.removeChild(child.firstChild);
-                continue;
-            }
-            if (child.nodeName !== 'BODY') html.removeChild(child);
-        }
-    };
-    document.addEventListener('readystatechange', clearDocument);
-
-    // Strategy 3: On DOMContentLoaded, remove foreign body elements
-    document.addEventListener('DOMContentLoaded', function() {
-        var bodies = document.querySelectorAll('body');
-        var k;
-        for (k = 0; k < bodies.length; k++) {
-            if (bodies[k].id !== 'myjd-captcha-body') {
-                bodies[k].parentNode.removeChild(bodies[k]);
-            }
-        }
-    });
-}
-
-function showNoJobError() {
-    beginSolverUi();
-    while (body.firstChild) body.removeChild(body.firstChild);
-    var errMsg = document.createElement('div');
-    errMsg.textContent = 'No CAPTCHA job found. Please try again from the MyJDownloader web interface.';
-    errMsg.style.textAlign = 'center';
-    errMsg.style.fontSize = '16px';
-    errMsg.style.marginTop = '40px';
-    body.appendChild(errMsg);
-}
-
-// Park-before-open handoff: resolve job first, then wipe the hoster DOM.
-loadCaptchaJob(function(job) {
+// --- Read job data from chrome.storage.session ---
+chrome.storage.session.get('myjd_captcha_job', function(result) {
+    var job = result && result.myjd_captcha_job;
     if (!job) {
-        showNoJobError();
+        while (body.firstChild) body.removeChild(body.firstChild);
+        var errMsg = document.createElement('div');
+        errMsg.textContent = 'No CAPTCHA job found. Please try again from the MyJDownloader web interface.';
+        errMsg.style.textAlign = 'center';
+        errMsg.style.fontSize = '16px';
+        errMsg.style.marginTop = '40px';
+        body.appendChild(errMsg);
         return;
     }
-    beginSolverUi();
     renderCaptchaWidget(job);
 });
 
@@ -357,7 +281,7 @@ function injectSkipButtons(job) {
             chrome.runtime.sendMessage({
                 action: 'captcha-skip',
                 data: {
-                    callbackUrl: 'MYJD',
+                    callbackUrl: job.callbackUrl || 'MYJD',
                     captchaId: job.captchaId,
                     skipType: skipType
                 }
@@ -385,8 +309,9 @@ function startTokenPolling(job) {
                     action: 'captcha-solved',
                     data: {
                         token: recaptchaTextareas[i].value,
-                        callbackUrl: 'MYJD',
-                        captchaId: job.captchaId
+                        callbackUrl: job.callbackUrl || 'MYJD',
+                        captchaId: job.captchaId,
+                        deviceId: job.deviceId || null
                     }
                 });
                 return;
@@ -403,8 +328,9 @@ function startTokenPolling(job) {
                     action: 'captcha-solved',
                     data: {
                         token: hcaptchaTextareas[i].value,
-                        callbackUrl: 'MYJD',
-                        captchaId: job.captchaId
+                        callbackUrl: job.callbackUrl || 'MYJD',
+                        captchaId: job.captchaId,
+                        deviceId: job.deviceId || null
                     }
                 });
                 return;
@@ -417,7 +343,7 @@ function startTokenPolling(job) {
 
 /**
  * 5-minute countdown timer with visual urgency.
- * Sends skip(single) with MYJD callbackUrl on expiry.
+ * Sends skip(single) with the job's callback on expiry.
  */
 function startCountdown(job) {
     var TIMEOUT_MS = 5 * 60 * 1000; // 300000ms = 5 minutes
@@ -454,7 +380,7 @@ function startCountdown(job) {
             chrome.runtime.sendMessage({
                 action: 'captcha-skip',
                 data: {
-                    callbackUrl: 'MYJD',
+                    callbackUrl: job.callbackUrl || 'MYJD',
                     captchaId: job.captchaId,
                     skipType: 'single'
                 }

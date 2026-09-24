@@ -49,8 +49,8 @@ var WebinterfaceEnhancer = (function () {
 // MyJD web UI shows images/captcha.png in #gwtCaptchasWaiting when a captcha
 // is pending. Clicking it does nothing useful for a remote JD without this
 // bridge (Rc2Service is never instantiated). Forward the click to the SW,
-// which lists pending captchas and opens a hoster#rc2jdt tab (or focuses one
-// already open for that captcha id).
+// which opens the same hoster#rc2jdt tab as remote auto-open — even when the
+// auto-open setting is off.
 function isCaptchaIconClickTarget(target) {
     if (!target || !target.closest) return false;
     if (target.closest('#gwtCaptchasWaiting')) return true;

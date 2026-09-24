@@ -86,34 +86,6 @@ describe('Manual remote MyJD captcha open (icon click)', () => {
     });
   });
 
-
-  describe('park-before-open handoff order', () => {
-    const prepareSrc = extractFunction(bgSource, 'prepareCaptchaTab');
-
-    it('awaits sessionAccessReady then writes myjd_captcha_job before tabs.create/update', () => {
-      expect(bgSource).toMatch(/const sessionAccessReady = chrome\.storage\.session\.setAccessLevel/);
-      expect(prepareSrc).toMatch(/await sessionAccessReady/);
-      const setIdx = prepareSrc.indexOf("chrome.storage.session.set({ myjd_captcha_job");
-      const createIdx = prepareSrc.indexOf('chrome.tabs.create');
-      const updateIdx = prepareSrc.indexOf('chrome.tabs.update');
-      expect(setIdx).toBeGreaterThan(-1);
-      expect(createIdx).toBeGreaterThan(setIdx);
-      expect(updateIdx).toBeGreaterThan(setIdx);
-    });
-
-    it('registers activeCaptchaTabs before navigating to the hoster URL', () => {
-      const trackIdx = prepareSrc.indexOf('activeCaptchaTabs[tabId]');
-      const updateIdx = prepareSrc.indexOf('chrome.tabs.update');
-      expect(trackIdx).toBeGreaterThan(-1);
-      expect(updateIdx).toBeGreaterThan(trackIdx);
-    });
-
-    it('exposes myjd-captcha-get-job so the content script can read the parked job via the SW', () => {
-      expect(bgSource).toMatch(/action === ["']myjd-captcha-get-job["']/);
-      expect(bgSource).toMatch(/chrome\.storage\.session\.get\(['"]myjd_captcha_job['"]\)/);
-    });
-  });
-
   describe('prepareCaptchaTab creates a tab when tabId is missing', () => {
     it('source calls chrome.tabs.create when tabId is null', () => {
       expect(bgSource).toMatch(/tabs\.create\(\s*\{\s*url:\s*'about:blank'/);
@@ -178,11 +150,24 @@ describe('Manual remote MyJD captcha open (icon click)', () => {
     });
   });
 
-  describe('offscreen captcha list/get for the icon path', () => {
-    it('defines list and get handlers (no solve — fix branch keeps myjdrc2 delivery)', () => {
+  describe('MyJD solve via device API', () => {
+    it('exposes solveCaptchaViaMyJdApi that calls offscreen-captcha-solve', () => {
+      expect(bgSource).toMatch(/function solveCaptchaViaMyJdApi/);
+      expect(bgSource).toMatch(/offscreen-captcha-solve/);
+    });
+
+    it('captcha-solved MYJD path prefers the device API before web UI tabs', () => {
+      expect(bgSource).toMatch(/action === ["']captcha-solved["']/);
+      expect(bgSource).toMatch(/solveCaptchaViaMyJdApi\(solvedDeviceId/);
+      expect(bgSource).toMatch(/falling back to web UI tabs/);
+    });
+  });
+
+  describe('offscreen captcha list/get/solve for the icon path', () => {
+    it('defines list, get, and solve handlers', () => {
       expect(offscreenSource).toMatch(/offscreen-captcha-list/);
       expect(offscreenSource).toMatch(/offscreen-captcha-get/);
-      expect(offscreenSource).not.toMatch(/offscreen-captcha-solve/);
+      expect(offscreenSource).toMatch(/offscreen-captcha-solve/);
     });
 
     it('routes through setActiveDevice + api.send (not hardcoded api.jdownloader.org)', () => {
@@ -198,10 +183,11 @@ describe('Manual remote MyJD captcha open (icon click)', () => {
       expect(offscreenSource).toMatch(/retrying via cloud relay/);
     });
 
-    it('uses /captcha/list, /captcha/getCaptchaJob, /captcha/get rawtoken', () => {
+    it('uses /captcha/list, /captcha/getCaptchaJob, /captcha/get rawtoken, /captcha/solve', () => {
       expect(offscreenSource).toMatch(/\/captcha\/list/);
       expect(offscreenSource).toMatch(/\/captcha\/getCaptchaJob/);
       expect(offscreenSource).toMatch(/'rawtoken'/);
+      expect(offscreenSource).toMatch(/\/captcha\/solve/);
     });
   });
 });

@@ -171,47 +171,47 @@ require(['jdapi'], function(API) {
 
 // Handle messages from service worker ONLY — ignore messages not targeted at offscreen
 
-// Device-scoped call that goes through jdapi's normal path (Direct Connection
-// / mydns when available, otherwise the api.jdownloader.org relay). Never
-// hardcode cloud URLs here — setActiveDevice + send picks the transport.
-// On a direct-path failure, clear localURL once and retry via the relay so
-// a flaky LAN/mydns host does not stall captcha list/get for the icon path.
-function sendCaptchaDeviceCall(deviceId, action, params) {
-    var deferred = $.Deferred();
-    if (!api) {
-        deferred.reject('API not initialized');
-        return deferred;
-    }
-    if (!api.jdAPICore || !api.jdAPICore.options.sessiontoken) {
-        deferred.reject('Not logged in');
-        return deferred;
-    }
-    api.setActiveDevice(deviceId);
-    function attempt(isRetry) {
-        api.send(action, params).done(function(result) {
-            deferred.resolve(result);
-        }).fail(function(err) {
-            if (isRetry || !api.apiDeviceController || typeof api.apiDeviceController.getDeviceAPIForId !== 'function') {
-                deferred.reject(err);
-                return;
-            }
-            api.apiDeviceController.getDeviceAPIForId(deviceId).done(function(deviceApi) {
-                if (deviceApi && deviceApi.localURL) {
-                    console.warn('[Offscreen] Direct captcha call failed for', action, '- retrying via cloud relay');
-                    deviceApi.setLocalURL(null);
-                    api.setActiveDevice(deviceId);
-                    attempt(true);
-                } else {
+    // Device-scoped call that goes through jdapi's normal path (Direct Connection
+    // / mydns when available, otherwise the api.jdownloader.org relay). Never
+    // hardcode cloud URLs here — setActiveDevice + send picks the transport.
+    // On a direct-path failure, clear localURL once and retry via the relay so
+    // a flaky LAN/mydns host does not stall captcha polling.
+    function sendCaptchaDeviceCall(deviceId, action, params) {
+        var deferred = $.Deferred();
+        if (!api) {
+            deferred.reject('API not initialized');
+            return deferred;
+        }
+        if (!api.jdAPICore || !api.jdAPICore.options.sessiontoken) {
+            deferred.reject('Not logged in');
+            return deferred;
+        }
+        api.setActiveDevice(deviceId);
+        function attempt(isRetry) {
+            api.send(action, params).done(function(result) {
+                deferred.resolve(result);
+            }).fail(function(err) {
+                if (isRetry || !api.apiDeviceController || typeof api.apiDeviceController.getDeviceAPIForId !== 'function') {
                     deferred.reject(err);
+                    return;
                 }
-            }).fail(function() {
-                deferred.reject(err);
+                api.apiDeviceController.getDeviceAPIForId(deviceId).done(function(deviceApi) {
+                    if (deviceApi && deviceApi.localURL) {
+                        console.warn('[Offscreen] Direct captcha call failed for', action, '- retrying via cloud relay');
+                        deviceApi.setLocalURL(null);
+                        api.setActiveDevice(deviceId);
+                        attempt(true);
+                    } else {
+                        deferred.reject(err);
+                    }
+                }).fail(function() {
+                    deferred.reject(err);
+                });
             });
-        });
+        }
+        attempt(false);
+        return deferred;
     }
-    attempt(false);
-    return deferred;
-}
 
 chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
     // Only handle messages explicitly targeted at the offscreen document.
@@ -384,6 +384,40 @@ chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
                 });
             }).fail(function(err) {
                 sendResponse({ success: false, error: (err && err.message) || String(err) });
+            });
+            return true;
+
+        case 'offscreen-captcha-solve':
+            if (!request.deviceId || request.captchaId == null || request.token == null) {
+                sendResponse({ success: false, error: 'deviceId, captchaId and token required' });
+                return true;
+            }
+            // Match /captcha/get's rawtoken challenge: JD expects the 3-param
+            // solve(id, result, resultFormat) when the challenge was fetched as
+            // rawtoken (hCaptcha / reCAPTCHA). Id is JSON-stringified like get.
+            var solveId = typeof request.captchaId === 'number'
+                ? JSON.stringify(request.captchaId)
+                : (typeof request.captchaId === 'string' && /^\d+$/.test(request.captchaId)
+                    ? request.captchaId
+                    : JSON.stringify(request.captchaId));
+            var resultFormat = request.resultFormat || 'rawtoken';
+            var solveParams = [solveId, request.token, resultFormat];
+            console.log('[Offscreen] captcha/solve', request.deviceId, 'id=', solveId, 'format=', resultFormat, 'tokenLen=', String(request.token).length);
+            sendCaptchaDeviceCall(request.deviceId, '/captcha/solve', solveParams).done(function(result) {
+                // jdapi wraps the boolean in {data: ...} or returns it bare.
+                var accepted = result && result.data !== undefined ? result.data : result;
+                console.log('[Offscreen] captcha/solve response', JSON.stringify(result));
+                if (accepted === false) {
+                    sendResponse({ success: false, error: 'JD rejected captcha solution', result: result });
+                } else {
+                    sendResponse({ success: true, result: result, accepted: accepted });
+                }
+            }).fail(function(err) {
+                var error;
+                try { error = (err && typeof err === 'object') ? JSON.parse(JSON.stringify(err)) : err; }
+                catch (e) { error = (err && err.message) || String(err); }
+                console.warn('[Offscreen] captcha/solve failed', error);
+                sendResponse({ success: false, error: error });
             });
             return true;
 

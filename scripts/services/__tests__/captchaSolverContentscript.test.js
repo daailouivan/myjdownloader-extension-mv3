@@ -15,16 +15,6 @@ var manifest = JSON.parse(fs.readFileSync(
 
 describe('CAPTCHA Solver Content Script', function() {
 
-  describe('#rc2jdt ownership', function() {
-    it('should bail out on #rc2jdt tabs so myjdCaptchaSolver owns them', function() {
-      expect(csSource).toMatch(/#rc2jdt/);
-      var hashGate = csSource.indexOf('#rc2jdt');
-      var captchaPath = csSource.indexOf('captchaPathPattern');
-      expect(hashGate).toBeGreaterThan(-1);
-      expect(captchaPath).toBeGreaterThan(hashGate);
-    });
-  });
-
   describe('CAP-01: URL pattern detection', function() {
     it('should contain CAPTCHA path regex matching recaptchav2, recaptchav3, and hcaptcha', function() {
       expect(csSource).toMatch(/recaptchav2\|recaptchav3\|hcaptcha/);
