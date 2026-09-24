@@ -183,28 +183,67 @@ function injectCaptchaApiScript(tabId, url) {
    world: 'MAIN',
    args: [url],
    func: function(scriptUrl) {
-    // Ensure <head> exists: after an in-place wipe it should, but never fall
-    // back to documentElement — clearDocument would strip a script parked there.
-    var head = document.head;
-    if (!head) {
-     head = document.createElement('head');
-     var root = document.documentElement;
-     root.insertBefore(head, root.firstChild);
-    }
-    var container = document.getElementById('captchaContainer') || head;
-    var script = document.createElement('script');
-    script.src = scriptUrl;
-    script.async = true;
-    // Cloudflare rocket-loader: do not defer this third-party widget script.
-    script.setAttribute('data-cfasync', 'false');
-    script.addEventListener('load', function() {
-     window.postMessage({ __myjd_captcha_api__: true, status: 'loaded' }, '*');
+    // Promise resolves only after the script's load/error — appendChild alone
+    // used to report ok while rocket-loader / a head wipe still prevented the
+    // network request, leaving the widget blank until the 15s UI timeout.
+    return new Promise(function(resolve, reject) {
+     var head = document.head;
+     if (!head) {
+      head = document.createElement('head');
+      document.documentElement.insertBefore(head, document.documentElement.firstChild);
+     }
+
+     // Disable Cloudflare rocket-loader hooks that rewrite createElement('script').
+     try {
+      var scripts = document.querySelectorAll('script[src*="rocket-loader"], script[data-cf-settings]');
+      for (var i = 0; i < scripts.length; i++) {
+       if (scripts[i].parentNode) scripts[i].parentNode.removeChild(scripts[i]);
+      }
+      if (window.CloudFlare) {
+       try { delete window.CloudFlare; } catch (e1) { window.CloudFlare = undefined; }
+      }
+     } catch (e2) { /* ignore */ }
+
+     // Always park api.js in <head> (never #captchaContainer): clearDocument
+     // only preserves provider scripts that live under <head>, and hoster JS
+     // is more aggressive about scrubbing scripts inside the body.
+     var nativeCreate = Document.prototype.createElement.bind(document);
+     // Drop a previous failed attempt so we don't stack duplicate tags.
+     var prior = head.querySelectorAll('script[data-myjd-captcha-api="1"]');
+     for (var p = 0; p < prior.length; p++) {
+      if (prior[p].parentNode) prior[p].parentNode.removeChild(prior[p]);
+     }
+
+     var script = nativeCreate('script');
+     script.src = scriptUrl;
+     script.async = true;
+     script.setAttribute('data-cfasync', 'false');
+     script.setAttribute('data-myjd-captcha-api', '1');
+
+     var settled = false;
+     function finish(status, errMsg) {
+      if (settled) return;
+      settled = true;
+      try {
+       window.postMessage({ __myjd_captcha_api__: true, status: status }, '*');
+      } catch (e3) { /* ignore */ }
+      if (status === 'loaded') resolve();
+      else reject(new Error(errMsg || ('CAPTCHA API script ' + status)));
+     }
+
+     script.addEventListener('load', function() { finish('loaded'); });
+     script.addEventListener('error', function() { finish('error', 'CAPTCHA API script failed to load'); });
+     // Hard ceiling so a hung request cannot pin the SW message channel forever.
+     setTimeout(function() {
+      if (!settled) finish('error', 'CAPTCHA API script load timed out');
+     }, 10000);
+
+     head.appendChild(script);
     });
-    script.addEventListener('error', function() {
-     window.postMessage({ __myjd_captcha_api__: true, status: 'error' }, '*');
-    });
-    container.appendChild(script);
    }
+  }).then(function(results) {
+   // executeScript resolves to [{result}] for the returned Promise.
+   return results;
   }).catch(function(err) {
    if (isTransientFrameError(err) && attempt < maxAttempts) {
     console.warn('Background: CAPTCHA API inject attempt', attempt, 'failed (transient), retrying:', err && err.message);

@@ -57,6 +57,15 @@ describe('MYJD CAPTCHA Solver Content Script', function() {
     it('should preserve CAPTCHA api.js scripts when clearing <head>', function() {
       expect(csSource).toMatch(/hcaptcha\.com\/1\/api\.js/);
     });
+    it('should force html/body visibility so Cloudflare anti-flicker cannot hide the UI on screen', function() {
+      expect(csSource).toMatch(/forceCaptchaUiVisible/);
+      expect(csSource).toMatch(/myjd-captcha-visible/);
+      expect(csSource).toMatch(/visibility:\s*visible\s*!important/);
+    });
+    it('should preserve the visibility stylesheet when clearing <head>', function() {
+      expect(csSource).toMatch(/keepStyle/);
+      expect(csSource).toMatch(/myjd-captcha-visible/);
+    });
     it('should have DOMContentLoaded defense for foreign body removal', function() {
       expect(csSource).toMatch(/DOMContentLoaded/);
       expect(csSource).toMatch(/myjd-captcha-body/);

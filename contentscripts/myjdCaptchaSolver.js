@@ -46,6 +46,53 @@ loadingMsg.style.fontSize = '18px';
 loadingMsg.style.marginTop = '40px';
 body.appendChild(loadingMsg);
 
+// Force the CAPTCHA UI visible on screen. Cloudflare anti-flicker CSS
+// (html{visibility:hidden} with @media print{visibility:visible}) and leftover
+// hoster opacity rules can leave a print-preview-only page even after we wipe
+// <head> — the <html> element's inline/computed styles survive the wipe.
+var forceCaptchaUiVisible = function() {
+    var root = document.documentElement;
+    if (root) {
+        root.style.setProperty('visibility', 'visible', 'important');
+        root.style.setProperty('opacity', '1', 'important');
+        root.style.setProperty('display', 'block', 'important');
+        root.style.setProperty('background', '#f5f5f5', 'important');
+        root.removeAttribute('hidden');
+        if (root.classList) {
+            root.classList.remove('cf-invisible', 'no-js', 'js-loading');
+        }
+    }
+    if (body) {
+        body.style.setProperty('visibility', 'visible', 'important');
+        body.style.setProperty('opacity', '1', 'important');
+    }
+    var headEl = document.head;
+    if (headEl && !document.getElementById('myjd-captcha-visible')) {
+        var style = document.createElement('style');
+        style.id = 'myjd-captcha-visible';
+        style.textContent = [
+            'html, body, body#myjd-captcha-body {',
+            '  visibility: visible !important;',
+            '  opacity: 1 !important;',
+            '  content-visibility: visible !important;',
+            '}',
+            'html { background: #f5f5f5 !important; }',
+            'body#myjd-captcha-body {',
+            '  color: #333 !important;',
+            '  background: #f5f5f5 !important;',
+            '  display: flex !important;',
+            '}',
+            '#myjd-captcha-body, #captchaContainer, #myjd-captcha-controls, #myjd-countdown {',
+            '  visibility: visible !important;',
+            '  opacity: 1 !important;',
+            '}'
+        ].join('\\n');
+        headEl.appendChild(style);
+    }
+};
+forceCaptchaUiVisible();
+
+
 // Drop any extra <body> siblings that a late hoster parse may have inserted.
 var removeForeignBodies = function() {
     var bodies = document.querySelectorAll('body');
@@ -75,11 +122,13 @@ var clearDocument = function() {
             var hchild = child.firstChild;
             while (hchild) {
                 var next = hchild.nextSibling;
-                var keep = hchild.nodeName === 'SCRIPT' && hchild.src &&
+                var keepScript = hchild.nodeName === 'SCRIPT' && hchild.src &&
                     /hcaptcha\.com\/1\/api\.js|google\.com\/recaptcha\/api\.js/.test(hchild.src);
-                if (!keep) child.removeChild(hchild);
+                var keepStyle = hchild.nodeName === 'STYLE' && hchild.id === 'myjd-captcha-visible';
+                if (!keepScript && !keepStyle) child.removeChild(hchild);
                 hchild = next;
             }
+            forceCaptchaUiVisible();
             continue;
         }
         html.removeChild(child);
@@ -120,12 +169,22 @@ chrome.storage.session.get('myjd_captcha_job', function(result) {
  * Render the CAPTCHA widget, skip buttons, countdown timer, and start token polling.
  */
 function renderCaptchaWidget(job) {
-    // Clear document head and body children
+    // Clear document head and body children — but keep a MAIN-world api.js
+    // (and our visibility stylesheet) that may already have been injected.
     var head = document.head || document.getElementsByTagName('head')[0];
     if (head) {
-        while (head.firstChild) head.removeChild(head.firstChild);
+        var hchild = head.firstChild;
+        while (hchild) {
+            var next = hchild.nextSibling;
+            var keepScript = hchild.nodeName === 'SCRIPT' && hchild.src &&
+                /hcaptcha\.com\/1\/api\.js|google\.com\/recaptcha\/api\.js/.test(hchild.src);
+            var keepStyle = hchild.nodeName === 'STYLE' && hchild.id === 'myjd-captcha-visible';
+            if (!keepScript && !keepStyle) head.removeChild(hchild);
+            hchild = next;
+        }
     }
     while (body.firstChild) body.removeChild(body.firstChild);
+    forceCaptchaUiVisible();
 
     // Set page title
     document.title = 'CAPTCHA - ' + (job.hoster || 'JDownloader');
@@ -139,6 +198,7 @@ function renderCaptchaWidget(job) {
     body.style.padding = '32px';
     body.style.maxWidth = '600px';
     body.style.margin = '0 auto';
+    forceCaptchaUiVisible();
 
     // Header
     var header = document.createElement('h2');

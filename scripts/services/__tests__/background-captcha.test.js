@@ -282,7 +282,13 @@ describe('Background CAPTCHA Handlers (CAP-03, CAP-04, CAP-07)', () => {
       expect(inject[0]).toMatch(/chrome\.scripting\.executeScript/);
       expect(inject[0]).toMatch(/world:\s*['"]MAIN['"]/);
       expect(inject[0]).toMatch(/data-cfasync/);
-      expect(inject[0]).toMatch(/captchaContainer/);
+      // Always inject into <head> (not #captchaContainer) so clearDocument's
+      // head-preserve path keeps the tag, and use the native createElement to
+      // bypass Cloudflare rocket-loader hooks.
+      expect(inject[0]).toMatch(/document\.head|document\.createElement\(['"]head['"]\)/);
+      expect(inject[0]).toMatch(/Document\.prototype\.createElement/);
+      expect(inject[0]).toMatch(/data-myjd-captcha-api/);
+      expect(inject[0]).not.toMatch(/getElementById\(['"]captchaContainer['"]\)/);
     });
 
     it('should report load/error back via window.postMessage with target origin \'*\'', () => {
@@ -292,13 +298,13 @@ describe('Background CAPTCHA Handlers (CAP-03, CAP-04, CAP-07)', () => {
       // receiver already checks event.source === window.
       const inject = bgSource.match(/function\s+injectCaptchaApiScript[\s\S]*?\n\}/);
       expect(inject).not.toBeNull();
-      const postMessageCalls = inject[0].match(/window\.postMessage\([^)]*\)/g);
-      expect(postMessageCalls).not.toBeNull();
-      expect(postMessageCalls.length).toBeGreaterThanOrEqual(2);
-      postMessageCalls.forEach(function(call) {
-        expect(call).toMatch(/__myjd_captcha_api__/);
-        expect(call).toMatch(/,\s*'\*'\s*\)$/);
-      });
+      // One shared finish() posts both 'loaded' and 'error' with target '*'.
+      expect(inject[0]).toMatch(/window\.postMessage\(/);
+      expect(inject[0]).toMatch(/__myjd_captcha_api__/);
+      expect(inject[0]).toMatch(/status:\s*status/);
+      expect(inject[0]).toMatch(/,\s*'\*'\s*\)/);
+      expect(inject[0]).toMatch(/finish\(['"]loaded['"]\)/);
+      expect(inject[0]).toMatch(/finish\(['"]error['"]/);
     });
 
     it('should respond with status:error when the URL is rejected or injection fails', () => {
