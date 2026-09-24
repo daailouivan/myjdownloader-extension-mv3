@@ -39,12 +39,22 @@ describe('MYJD CAPTCHA Solver Content Script', function() {
     it('should call document.close', function() {
       expect(csSource).toMatch(/document\.close/);
     });
-    it('should have clearDocument defense', function() {
+    it('should reuse document.body instead of appending a second body', function() {
+      expect(csSource).toMatch(/var body = document\.body/);
+      expect(csSource).toMatch(/body\.id = 'myjd-captcha-body'/);
+      // Must not createElement('body') as the primary path — that caused the blank tab.
+      expect(csSource).toMatch(/if \(!body\)/);
+    });
+    it('should have clearDocument defense that removes foreign bodies', function() {
       expect(csSource).toMatch(/clearDocument/);
+      expect(csSource).toMatch(/removeForeignBodies/);
     });
     it('should have DOMContentLoaded defense for foreign body removal', function() {
       expect(csSource).toMatch(/DOMContentLoaded/);
       expect(csSource).toMatch(/myjd-captcha-body/);
+    });
+    it('should call window.stop to abort the hoster document race', function() {
+      expect(csSource).toMatch(/window\.stop/);
     });
   });
 

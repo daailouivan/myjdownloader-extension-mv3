@@ -36,11 +36,11 @@ describe('Background CAPTCHA Handlers (CAP-03, CAP-04, CAP-07)', () => {
 
   describe('captcha-solved handler (CAP-03, CAP-04)', () => {
     it('should fetch the do=solve&response= URL (MV3 service worker: no XHR)', () => {
-      expect(bgSource).toMatch(/fetch\(\s*request\.data\.callbackUrl\s*\+\s*['"]&do=solve&response=['"]\s*\+\s*encodeURIComponent\(request\.data\.token\)/);
+      expect(bgSource).toMatch(/fetch\(callbackUrl\s*\+\s*['"]&do=solve&response=['"]\s*\+\s*encodeURIComponent\(token\)/);
     });
 
     it('should URI-encode the token with encodeURIComponent', () => {
-      expect(bgSource).toMatch(/encodeURIComponent\(request\.data\.token\)/);
+      expect(bgSource).toMatch(/encodeURIComponent\(token\)/);
     });
 
     it('should call chrome.tabs.remove with setTimeout 2-second delay', () => {
@@ -169,7 +169,9 @@ describe('Background CAPTCHA Handlers (CAP-03, CAP-04, CAP-07)', () => {
     });
 
     it('should navigate tab with #rc2jdt hash', () => {
-      expect(bgSource).toMatch(/chrome\.tabs\.update.*#rc2jdt/);
+      expect(bgSource).toMatch(/buildCaptchaTabUrl/);
+      expect(bgSource).toMatch(/u\.hash = 'rc2jdt'/);
+      expect(bgSource).toMatch(/chrome\.tabs\.update\(tabId,\s*\{\s*url:\s*captchaUrl\s*\}\)/);
     });
 
     it('should track tab in activeCaptchaTabs with MYJD callbackUrl', () => {

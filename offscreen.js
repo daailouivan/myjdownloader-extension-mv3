@@ -392,11 +392,32 @@ chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
                 sendResponse({ success: false, error: 'deviceId, captchaId and token required' });
                 return true;
             }
-            // Official My.JDownloader API: /captcha/solve?id&result (2-param form).
-            sendCaptchaDeviceCall(request.deviceId, '/captcha/solve', [request.captchaId, request.token]).done(function(result) {
-                sendResponse({ success: true, result: result });
+            // Match /captcha/get's rawtoken challenge: JD expects the 3-param
+            // solve(id, result, resultFormat) when the challenge was fetched as
+            // rawtoken (hCaptcha / reCAPTCHA). Id is JSON-stringified like get.
+            var solveId = typeof request.captchaId === 'number'
+                ? JSON.stringify(request.captchaId)
+                : (typeof request.captchaId === 'string' && /^\d+$/.test(request.captchaId)
+                    ? request.captchaId
+                    : JSON.stringify(request.captchaId));
+            var resultFormat = request.resultFormat || 'rawtoken';
+            var solveParams = [solveId, request.token, resultFormat];
+            console.log('[Offscreen] captcha/solve', request.deviceId, 'id=', solveId, 'format=', resultFormat, 'tokenLen=', String(request.token).length);
+            sendCaptchaDeviceCall(request.deviceId, '/captcha/solve', solveParams).done(function(result) {
+                // jdapi wraps the boolean in {data: ...} or returns it bare.
+                var accepted = result && result.data !== undefined ? result.data : result;
+                console.log('[Offscreen] captcha/solve response', JSON.stringify(result));
+                if (accepted === false) {
+                    sendResponse({ success: false, error: 'JD rejected captcha solution', result: result });
+                } else {
+                    sendResponse({ success: true, result: result, accepted: accepted });
+                }
             }).fail(function(err) {
-                sendResponse({ success: false, error: (err && err.message) || String(err) });
+                var error;
+                try { error = (err && typeof err === 'object') ? JSON.parse(JSON.stringify(err)) : err; }
+                catch (e) { error = (err && err.message) || String(err); }
+                console.warn('[Offscreen] captcha/solve failed', error);
+                sendResponse({ success: false, error: error });
             });
             return true;
 

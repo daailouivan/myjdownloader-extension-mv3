@@ -5,13 +5,24 @@
 if (!location.hash.startsWith('#rc2jdt')) return;
 
 // --- DOM replacement (defense-in-depth) ---
+// Abort the hoster document so its HTML/CSS cannot race with our UI.
+try { window.stop(); } catch (e) { /* ignore */ }
 
-// Strategy 1: Immediately replace the entire document
+// Strategy 1: Replace the document, then REUSE document.body.
+// document.open()/close() already creates an empty <body>. Appending a second
+// <body id="myjd-captcha-body"> orphans the solver UI: browsers keep the first
+// body as document.body (where hCaptcha portals), so the tab looks blank while
+// the real widget sits on the second, non-document body.
 document.open();
 document.close();
 
-// Build placeholder DOM using createElement only (no inline scripts)
-var body = document.createElement('body');
+var body = document.body;
+if (!body) {
+    body = document.createElement('body');
+    document.documentElement.appendChild(body);
+} else {
+    while (body.firstChild) body.removeChild(body.firstChild);
+}
 body.id = 'myjd-captcha-body';
 body.style.background = '#3c686f';
 body.style.color = '#fff';
@@ -24,9 +35,19 @@ loadingMsg.style.textAlign = 'center';
 loadingMsg.style.fontSize = '18px';
 loadingMsg.style.marginTop = '40px';
 body.appendChild(loadingMsg);
-document.documentElement.appendChild(body);
 
-// Strategy 2: On readystatechange, clear foreign DOM
+// Drop any extra <body> siblings that a late hoster parse may have inserted.
+var removeForeignBodies = function() {
+    var bodies = document.querySelectorAll('body');
+    var k;
+    for (k = 0; k < bodies.length; k++) {
+        if (bodies[k].id !== 'myjd-captcha-body' && bodies[k].parentNode) {
+            bodies[k].parentNode.removeChild(bodies[k]);
+        }
+    }
+};
+
+// Strategy 2: On readystatechange, clear foreign DOM (including extra bodies).
 var clearDocument = function() {
     var html = document.documentElement;
     if (!html) return;
@@ -34,25 +55,27 @@ var clearDocument = function() {
     for (i = html.childNodes.length - 1; i >= 0; i--) {
         var child = html.childNodes[i];
         if (child.nodeName === 'BODY' && child.id === 'myjd-captcha-body') continue;
+        if (child.nodeName === 'BODY') {
+            html.removeChild(child);
+            continue;
+        }
         if (child.nodeName === 'HEAD') {
             while (child.firstChild) child.removeChild(child.firstChild);
             continue;
         }
-        if (child.nodeName !== 'BODY') html.removeChild(child);
+        html.removeChild(child);
     }
 };
 document.addEventListener('readystatechange', clearDocument);
 
-// Strategy 3: On DOMContentLoaded, remove foreign body elements
-document.addEventListener('DOMContentLoaded', function() {
-    var bodies = document.querySelectorAll('body');
-    var k;
-    for (k = 0; k < bodies.length; k++) {
-        if (bodies[k].id !== 'myjd-captcha-body') {
-            bodies[k].parentNode.removeChild(bodies[k]);
-        }
-    }
-});
+// Strategy 3: Remove foreign bodies on DOMContentLoaded — and immediately if
+// the open/close cycle already left us past 'loading' (so the event never fires).
+var onDomReady = function() { removeForeignBodies(); };
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', onDomReady);
+} else {
+    onDomReady();
+}
 
 // --- Interval handles for cleanup ---
 var pollingHandle = null;
@@ -302,7 +325,8 @@ function startTokenPolling(job) {
                     data: {
                         token: recaptchaTextareas[i].value,
                         callbackUrl: job.callbackUrl || 'MYJD',
-                        captchaId: job.captchaId
+                        captchaId: job.captchaId,
+                        deviceId: job.deviceId || null
                     }
                 });
                 return;
@@ -320,7 +344,8 @@ function startTokenPolling(job) {
                     data: {
                         token: hcaptchaTextareas[i].value,
                         callbackUrl: job.callbackUrl || 'MYJD',
-                        captchaId: job.captchaId
+                        captchaId: job.captchaId,
+                        deviceId: job.deviceId || null
                     }
                 });
                 return;

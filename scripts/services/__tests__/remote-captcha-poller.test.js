@@ -92,8 +92,37 @@ describe('Remote MyJD captcha poller', () => {
       expect(bgSource).toMatch(/tabId == null \|\| tabId < 0/);
     });
 
-    it('still uses tabs.update with #rc2jdt for existing tabs', () => {
-      expect(bgSource).toMatch(/chrome\.tabs\.update\(tabId,\s*\{\s*url:\s*jobDetails\.targetUrl\s*\+\s*'#rc2jdt'\s*\}\)/);
+    it('awaits CSP strip rule then navigates via buildCaptchaTabUrl', () => {
+      expect(bgSource).toMatch(/function buildCaptchaTabUrl/);
+      expect(bgSource).toMatch(/await addCspStrippingRule\(tabId\)/);
+      expect(bgSource).toMatch(/const captchaUrl = buildCaptchaTabUrl\(jobDetails\.targetUrl\)/);
+      expect(bgSource).toMatch(/chrome\.tabs\.update\(tabId,\s*\{\s*url:\s*captchaUrl\s*\}\)/);
+    });
+  });
+
+  describe('buildCaptchaTabUrl', () => {
+    const buildCaptchaTabUrl = new Function(
+      'return (' + extractFunction(bgSource, 'buildCaptchaTabUrl') + ');'
+    )();
+
+    it('forces https and #rc2jdt hash', () => {
+      expect(buildCaptchaTabUrl('http://upstore.net/abc')).toBe('https://upstore.net/abc#rc2jdt');
+    });
+
+    it('adds https when scheme is missing', () => {
+      expect(buildCaptchaTabUrl('upstore.net/abc')).toBe('https://upstore.net/abc#rc2jdt');
+    });
+
+    it('replaces an existing hash so the content-script gate still matches', () => {
+      expect(buildCaptchaTabUrl('https://upstore.net/abc#section')).toBe('https://upstore.net/abc#rc2jdt');
+    });
+  });
+
+  describe('stale remoteCaptchaOpen pruning', () => {
+    it('prunes before polling', () => {
+      expect(bgSource).toMatch(/function pruneStaleRemoteCaptchaOpen/);
+      expect(bgSource).toMatch(/await pruneStaleRemoteCaptchaOpen\(\)/);
+      expect(bgSource).toMatch(/chrome\.tabs\.get\(entry\.tabId\)/);
     });
   });
 
