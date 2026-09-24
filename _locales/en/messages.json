@@ -510,5 +510,11 @@
    },
    "ui_status_panel_no_device_connected_click_here": {
       "message": "Click here"
+   },
+   "ui_settings_auto_open_remote_captcha_title": {
+      "message": "Auto-open remote CAPTCHAs"
+   },
+   "ui_settings_auto_open_remote_captcha_description": {
+      "message": "When a headless or remote JDownloader has a browser CAPTCHA waiting, open a tab in this browser so you can solve it."
    }
 }

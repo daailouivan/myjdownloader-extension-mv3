@@ -301,6 +301,17 @@ angular.module('myjdWebextensionApp').run(['$templateCache', function($templateC
     "                <small>Solve CAPTCHAs without sending page data to third parties</small>\n" +
     "            </p>\n" +
     "        </div>\n" +
+    "        <div class=\"inlineSettingsContainer\" id=\"autoOpenRemoteCaptchaContainer\">\n" +
+    "            <label for=\"auto_open_remote_captcha\"><input type=\"checkbox\" id=\"auto_open_remote_captcha\"\n" +
+    "                    ng-model=\"settings[settingsKeys.AUTO_OPEN_REMOTE_CAPTCHA.key]\" />\n" +
+    "                {{'ui_settings_auto_open_remote_captcha_title'\n" +
+    "                | translate}}</label>\n" +
+    "            <div style=\"clear:both;\"></div>\n" +
+    "            <p class=\"description\">\n" +
+    "                <small>{{'ui_settings_auto_open_remote_captcha_description'\n" +
+    "                    | translate}}</small>\n" +
+    "            </p>\n" +
+    "        </div>\n" +
     "    </div>\n" +
     "    <h4>About</h4>\n" +
     "    <div id=\"aboutContainer\">\n" +

@@ -89,6 +89,7 @@ global.chrome = {
   tabs: {
     sendMessage: jest.fn(() => Promise.resolve()),
     get: jest.fn((tabId, callback) => callback({ id: tabId })),
+    create: jest.fn((opts) => Promise.resolve({ id: 9001, url: (opts && opts.url) || '' })),
     update: jest.fn(() => Promise.resolve()),
     query: jest.fn((queryInfo, callback) => {
       if (callback) callback([]);
